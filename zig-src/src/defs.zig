@@ -20,6 +20,16 @@ comptime {
     if (Entity == String) unreachable;
 }
 
+/// A QuakeC `vector`. With simd128 enabled this is passed as a `v128`.
+pub const Vector = @Vector(3, f32);
+
+/// A QuakeC field reference of type `.T` (e.g. `Field(String)` is `.string`).
+pub fn Field(comptime T: type) type {
+    return *addrspace(.externref) const struct {
+        pub const Type = T;
+    };
+}
+
 extern fn __quakec_load_entity(ptr: *const volatile void) Entity;
 extern fn __quakec_load_string(ptr: *const volatile void) String;
 extern fn __quakec_load_fn(ptr: *const volatile void) *addrspace(.funcref) const fn () callconv(.c) void;
@@ -159,3 +169,72 @@ pub const PutClientInServer = global(fn () void, 88);
 pub const ClientDisconnect = global(fn () void, 89);
 pub const SetNewParms = global(fn () void, 90);
 pub const SetChangeParms = global(fn () void, 91);
+
+// Builtins (vanilla NetQuake `defs.qc`), imported from the `builtin` module.
+// The comment on each gives its vanilla builtin number.
+
+pub extern "builtin" fn makevectors(ang: Vector) void; // #1
+pub extern "builtin" fn setorigin(e: Entity, o: Vector) void; // #2
+pub extern "builtin" fn setmodel(e: Entity, m: String) void; // #3
+pub extern "builtin" fn setsize(e: Entity, min: Vector, max: Vector) void; // #4
+pub extern "builtin" fn @"break"() void; // #6
+pub extern "builtin" fn random() f32; // #7
+pub extern "builtin" fn sound(e: Entity, chan: f32, samp: String, vol: f32, atten: f32) void; // #8
+pub extern "builtin" fn normalize(v: Vector) Vector; // #9
+pub extern "builtin" fn @"error"(e: String) void; // #10
+pub extern "builtin" fn objerror(e: String) void; // #11
+pub extern "builtin" fn vlen(v: Vector) f32; // #12
+pub extern "builtin" fn vectoyaw(v: Vector) f32; // #13
+pub extern "builtin" fn spawn() Entity; // #14
+pub extern "builtin" fn remove(e: Entity) void; // #15
+pub extern "builtin" fn traceline(v1: Vector, v2: Vector, nomonsters: f32, forent: Entity) void; // #16
+pub extern "builtin" fn checkclient() Entity; // #17
+pub extern "builtin" fn find(start: Entity, fld: Field(String), match: String) Entity; // #18
+pub extern "builtin" fn precache_sound(s: String) String; // #19
+pub extern "builtin" fn precache_model(s: String) String; // #20
+pub extern "builtin" fn stuffcmd(client: Entity, s: String) void; // #21
+pub extern "builtin" fn findradius(org: Vector, rad: f32) Entity; // #22
+pub extern "builtin" fn bprint(s: String) void; // #23
+pub extern "builtin" fn sprint(client: Entity, s: String) void; // #24
+pub extern "builtin" fn dprint(s: String) void; // #25
+pub extern "builtin" fn ftos(f: f32) String; // #26
+pub extern "builtin" fn vtos(v: Vector) String; // #27
+pub extern "builtin" fn coredump() void; // #28
+pub extern "builtin" fn traceon() void; // #29
+pub extern "builtin" fn traceoff() void; // #30
+pub extern "builtin" fn eprint(e: Entity) void; // #31
+pub extern "builtin" fn walkmove(yaw: f32, dist: f32) f32; // #32
+pub extern "builtin" fn droptofloor() f32; // #34
+pub extern "builtin" fn lightstyle(style: f32, value: String) void; // #35
+pub extern "builtin" fn rint(v: f32) f32; // #36
+pub extern "builtin" fn floor(v: f32) f32; // #37
+pub extern "builtin" fn ceil(v: f32) f32; // #38
+pub extern "builtin" fn checkbottom(e: Entity) f32; // #40
+pub extern "builtin" fn pointcontents(v: Vector) f32; // #41
+pub extern "builtin" fn fabs(f: f32) f32; // #43
+pub extern "builtin" fn aim(e: Entity, speed: f32) Vector; // #44
+pub extern "builtin" fn cvar(s: String) f32; // #45
+pub extern "builtin" fn localcmd(s: String) void; // #46
+pub extern "builtin" fn nextent(e: Entity) Entity; // #47
+pub extern "builtin" fn particle(o: Vector, d: Vector, color: f32, count: f32) void; // #48
+pub extern "builtin" fn ChangeYaw() void; // #49
+pub extern "builtin" fn vectoangles(v: Vector) Vector; // #51
+pub extern "builtin" fn WriteByte(to: f32, f: f32) void; // #52
+pub extern "builtin" fn WriteChar(to: f32, f: f32) void; // #53
+pub extern "builtin" fn WriteShort(to: f32, f: f32) void; // #54
+pub extern "builtin" fn WriteLong(to: f32, f: f32) void; // #55
+pub extern "builtin" fn WriteCoord(to: f32, f: f32) void; // #56
+pub extern "builtin" fn WriteAngle(to: f32, f: f32) void; // #57
+pub extern "builtin" fn WriteString(to: f32, s: String) void; // #58
+pub extern "builtin" fn WriteEntity(to: f32, s: Entity) void; // #59
+pub extern "builtin" fn movetogoal(step: f32) void; // #67
+pub extern "builtin" fn precache_file(s: String) String; // #68
+pub extern "builtin" fn makestatic(e: Entity) void; // #69
+pub extern "builtin" fn changelevel(s: String) void; // #70
+pub extern "builtin" fn cvar_set(@"var": String, val: String) void; // #72
+pub extern "builtin" fn centerprint(client: Entity, s: String) void; // #73
+pub extern "builtin" fn ambientsound(pos: Vector, samp: String, vol: f32, atten: f32) void; // #74
+pub extern "builtin" fn precache_model2(s: String) String; // #75
+pub extern "builtin" fn precache_sound2(s: String) String; // #76
+pub extern "builtin" fn precache_file2(s: String) String; // #77
+pub extern "builtin" fn setspawnparms(e: Entity) void; // #78
