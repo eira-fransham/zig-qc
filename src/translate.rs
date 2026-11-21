@@ -1,7 +1,7 @@
 //! Module-level translation: classify imports/exports, lower each function,
 //! then resolve types and render QuakeC source.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use anyhow::{Context as _, Result, bail};
@@ -10,6 +10,7 @@ use walrus::{
     ValType,
 };
 
+use crate::data::{DataKind, StaticData};
 use crate::lower;
 use crate::qc::{QcType, Sig, Ty, TypeVars};
 use crate::sysdefs::{self, GlobalMap};
@@ -108,6 +109,11 @@ pub struct Ctx<'m> {
     pub call_table: Option<TableId>,
     pub tv: TypeVars,
     pub warnings: Vec<String>,
+    /// The imported `__memory_base` global, if any.
+    pub memory_base: Option<GlobalId>,
+    pub data: StaticData,
+    /// Accessor functions needed for dynamic loads from static data.
+    pub data_accessors: BTreeSet<DataKind>,
 }
 
 impl Ctx<'_> {
@@ -164,10 +170,6 @@ pub struct Output {
 pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     let module = Module::from_buffer(wasm).context("failed to parse wasm module")?;
 
-    if module.data.iter().next().is_some() {
-        bail!("data segments are not supported yet (static data in linear memory)");
-    }
-
     let mut ctx = Ctx {
         module: &module,
         globals: GlobalMap::vanilla(),
@@ -176,6 +178,9 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         call_table: None,
         tv: TypeVars::default(),
         warnings: Vec::new(),
+        memory_base: None,
+        data: StaticData::default(),
+        data_accessors: BTreeSet::new(),
     };
 
     // Tables: only the LLVM funcref call table is allowed.
@@ -229,12 +234,18 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                 ctx.funcs.insert(f, FuncInfo { name: import.name.clone(), sig, kind });
             }
             ImportKind::Table(_) => {}
+            // Static data is placed relative to `__memory_base`; see `data.rs`.
+            ImportKind::Global(g) if import.module == ENV_MODULE && import.name == "__memory_base" => {
+                ctx.memory_base = Some(g);
+            }
             ImportKind::Global(_) => {
                 bail!("imported global `{}.{}` is not supported", import.module, import.name)
             }
             ImportKind::Tag(_) => bail!("imported tag `{}` is not supported", import.name),
         }
     }
+
+    ctx.data = StaticData::from_module(&module, ctx.memory_base)?;
 
     // Wasm globals become QuakeC float globals.
     for g in module.globals.iter() {
@@ -337,6 +348,14 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             }
         }
         out.push('\n');
+    }
+
+    if !ctx.data_accessors.is_empty() {
+        out.push_str("// ---- static data accessors ----\n");
+        for &kind in &ctx.data_accessors {
+            ctx.data.accessor(kind).render(&mut tv, &mut out);
+            out.push('\n');
+        }
     }
 
     out.push_str("// ---- forward declarations ----\n");

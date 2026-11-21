@@ -12,6 +12,7 @@ use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use walrus::ir::{self, BinaryOp, Instr, InstrSeqId, InstrSeqType, LoadKind, StoreKind, UnaryOp, Value};
 use walrus::{FunctionId, LocalFunction, LocalId};
 
+use crate::data::{DATA_BASE, DataKind, StaticData};
 use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
 use crate::translate::{Ctx, FuncKind, Intrinsic};
 
@@ -562,6 +563,10 @@ impl Lower<'_, '_> {
                 self.stack.push((Expr::Local(n), t));
                 Ok(true)
             }
+            Instr::GlobalGet(ir::GlobalGet { global }) if Some(*global) == self.ctx.memory_base => {
+                self.stack.push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
+                Ok(true)
+            }
             Instr::GlobalGet(ir::GlobalGet { global }) => {
                 let (n, t) = self.ctx.wasm_globals.get(global).cloned().ok_or_else(|| anyhow!("unknown global"))?;
                 self.stack.push((Expr::Global(n), t));
@@ -716,6 +721,9 @@ impl Lower<'_, '_> {
             }
             Instr::Load(ir::Load { kind, arg, .. }) => {
                 let (addr, _) = self.pop()?;
+                if self.lower_data_load(&addr, *kind, arg.offset)? {
+                    return Ok(true);
+                }
                 match kind {
                     LoadKind::F32 => {
                         let g = self.global_at(&addr, arg.offset, QcType::Float)?;
@@ -731,6 +739,11 @@ impl Lower<'_, '_> {
             Instr::Store(ir::Store { kind, arg, .. }) => {
                 let (v, _) = self.pop()?;
                 let (addr, _) = self.pop()?;
+                if let Expr::Float(a) = addr
+                    && StaticData::is_data_addr(a as u64 + arg.offset)
+                {
+                    bail!("writes to static data are not supported yet (address {})", a as u64 + arg.offset);
+                }
                 match kind {
                     StoreKind::F32 => {
                         let g = self.global_at(&addr, arg.offset, QcType::Float)?;
@@ -746,6 +759,38 @@ impl Lower<'_, '_> {
             }
             _ => bail!("unsupported instruction"),
         }
+    }
+
+    /// Handle a load from static data. Returns `false` if this is a load
+    /// from a QuakeC global instead (a constant address below `DATA_BASE`).
+    fn lower_data_load(&mut self, addr: &Expr, kind: LoadKind, offset: u64) -> Result<bool> {
+        if let Expr::Float(a) = addr {
+            let a = *a as u64 + offset;
+            if !StaticData::is_data_addr(a) {
+                return Ok(false);
+            }
+            let dk = DataKind::from_load(kind).ok_or_else(|| anyhow!("unsupported load {kind:?} from static data"))?;
+            let v = self
+                .ctx
+                .data
+                .read(a, dk)
+                .ok_or_else(|| anyhow!("load from address {a}, outside of static data"))?;
+            if v.fract() == 0.0 && v.abs() > MAX_EXACT_INT as f32 && dk != DataKind::F32 {
+                self.ctx.warnings.push(format!("static data value {v} is not exactly representable as a QuakeC float"));
+            }
+            self.stack.push((Expr::Float(v), Ty::Known(QcType::Float)));
+            return Ok(true);
+        }
+        // A dynamic address: assume it points into static data, since QuakeC
+        // globals can't be indexed dynamically.
+        let dk = DataKind::from_load(kind)
+            .ok_or_else(|| anyhow!("unsupported load {kind:?} from a non-constant address"))?;
+        self.ctx.data_accessors.insert(dk);
+        let addr = if offset == 0 { addr.clone() } else { fold(BinOp::Add, addr.clone(), Expr::Float(offset as f32)) };
+        self.stack.push((addr, Ty::Known(QcType::Float)));
+        let sig = Sig { params: vec![Ty::Known(QcType::Float)], ret: Ty::Known(QcType::Float) };
+        self.call(Expr::FuncName(dk.accessor_name().into()), &sig, dk.accessor_name())?;
+        Ok(true)
     }
 
     fn lower_return(&mut self) -> Result<()> {
@@ -915,22 +960,55 @@ impl Lower<'_, '_> {
 
 fn lower_binop(op: BinaryOp, a: Expr, b: Expr) -> Result<Expr> {
     use BinaryOp::*;
-    let bin = |o, a, b| Expr::Bin(o, Box::new(a), Box::new(b));
-    Ok(match op {
+    let qop = match op {
         // Integers are represented as floats; wrapping is not emulated.
-        I32Add | F32Add => bin(BinOp::Add, a, b),
-        I32Sub | F32Sub => bin(BinOp::Sub, a, b),
-        I32Mul | F32Mul => bin(BinOp::Mul, a, b),
-        F32Div => bin(BinOp::Div, a, b),
-        I32Eq | F32Eq => bin(BinOp::Eq, a, b),
-        I32Ne | F32Ne => bin(BinOp::Ne, a, b),
-        I32LtS | I32LtU | F32Lt => bin(BinOp::Lt, a, b),
-        I32GtS | I32GtU | F32Gt => bin(BinOp::Gt, a, b),
-        I32LeS | I32LeU | F32Le => bin(BinOp::Le, a, b),
-        I32GeS | I32GeU | F32Ge => bin(BinOp::Ge, a, b),
-        I32And => bin(BinOp::BitAnd, a, b),
-        I32Or => bin(BinOp::BitOr, a, b),
+        I32Add | F32Add => BinOp::Add,
+        I32Sub | F32Sub => BinOp::Sub,
+        I32Mul | F32Mul => BinOp::Mul,
+        F32Div => BinOp::Div,
+        I32Eq | F32Eq => BinOp::Eq,
+        I32Ne | F32Ne => BinOp::Ne,
+        I32LtS | I32LtU | F32Lt => BinOp::Lt,
+        I32GtS | I32GtU | F32Gt => BinOp::Gt,
+        I32LeS | I32LeU | F32Le => BinOp::Le,
+        I32GeS | I32GeU | F32Ge => BinOp::Ge,
+        I32And => BinOp::BitAnd,
+        I32Or => BinOp::BitOr,
+        // `x << k` for a constant `k` is `x * 2^k`.
+        I32Shl => match b {
+            Expr::Float(k) if k.fract() == 0.0 && (0.0..32.0).contains(&k) => {
+                return Ok(fold(BinOp::Mul, a, Expr::Float((1u32 << k as u32) as f32)));
+            }
+            _ => bail!("unsupported shift by a non-constant amount"),
+        },
         other => bail!("unsupported binary operator {other:?}"),
+    };
+    Ok(fold(qop, a, b))
+}
+
+/// Build `a op b`, folding it if both operands are constants (as QuakeC
+/// would compute it at runtime). Folding matters for static data: addresses
+/// like `__memory_base + 16` must become constants.
+fn fold(op: BinOp, a: Expr, b: Expr) -> Expr {
+    let (Expr::Float(x), Expr::Float(y)) = (&a, &b) else {
+        return Expr::Bin(op, Box::new(a), Box::new(b));
+    };
+    let (x, y) = (*x, *y);
+    let bool = |c: bool| if c { 1.0 } else { 0.0 };
+    Expr::Float(match op {
+        BinOp::Add => x + y,
+        BinOp::Sub => x - y,
+        BinOp::Mul => x * y,
+        // Don't fold division (e.g. by zero); leave it to the VM.
+        BinOp::Div => return Expr::Bin(op, Box::new(a), Box::new(b)),
+        BinOp::Eq => bool(x == y),
+        BinOp::Ne => bool(x != y),
+        BinOp::Lt => bool(x < y),
+        BinOp::Gt => bool(x > y),
+        BinOp::Le => bool(x <= y),
+        BinOp::Ge => bool(x >= y),
+        BinOp::BitAnd => ((x as i32) & (y as i32)) as f32,
+        BinOp::BitOr => ((x as i32) | (y as i32)) as f32,
     })
 }
 

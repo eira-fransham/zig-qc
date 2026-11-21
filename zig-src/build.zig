@@ -1,8 +1,6 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const optimize = b.standardOptimizeOption(.{});
-
     // wasm32 with every feature enabled (notably reference types, SIMD and
     // tail calls), which is what wasm-to-qc expects.
     const target = b.resolveTargetQuery(.{
@@ -20,11 +18,11 @@ pub fn build(b: *std.Build) void {
     });
 
     // `addModule` makes this module available to consumers of this package.
-    const mod = b.addModule("quakec_zig", moduleOptions(b, "src/root.zig", target, optimize));
-    addQuakeCLibrary(b, "test", mod);
+    const mod = b.addModule("quakec_zig", moduleOptions(b, "src/root.zig", target, .small));
+    addOptLibrary(b, "test", mod);
 
-    const stress_test = b.createModule(moduleOptions(b, "src/stress-test.zig", target, optimize));
-    addQuakeCLibrary(b, "stress-test", stress_test);
+    const stress_test = b.createModule(moduleOptions(b, "src/stress-test.zig", target, .small));
+    addOptLibrary(b, "stress-test", stress_test);
 
     const mod_tests = b.addTest(.{
         .root_module = mod,
@@ -51,7 +49,7 @@ fn moduleOptions(
 
 /// Build `root_module` as a wasm library, optimise it with `wasm-opt`, and
 /// install the result as `lib/<name>.wasm`.
-fn addQuakeCLibrary(b: *std.Build, name: []const u8, root_module: *std.Build.Module) void {
+fn addOptLibrary(b: *std.Build, name: []const u8, root_module: *std.Build.Module) void {
     const lib = b.addLibrary(.{
         .name = b.fmt("{s}-unopt", .{name}),
         .linkage = .dynamic,

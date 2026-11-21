@@ -107,10 +107,20 @@ pub export fn classify(x: f32) f32 {
     return 2;
 }
 
-/// A `switch`, which becomes a `br_table`. The arms have side effects so
-/// that LLVM can't turn it into a lookup table in linear memory (data
-/// segments aren't supported yet).
-pub export fn pick(e: Entity, x: u32) void {
+/// A `switch` whose arms are only constants. LLVM turns this into a lookup
+/// table in a static data segment, read with a dynamic address.
+pub export fn pick(x: u32) f32 {
+    return switch (x) {
+        0 => 10,
+        1 => 20,
+        2 => 40,
+        3 => 80,
+        else => 0,
+    };
+}
+
+/// A `switch` with side effects, which stays a `br_table`.
+pub export fn pick_field(e: Entity, x: u32) void {
     switch (x) {
         0 => e.set(.health, 10),
         1 => e.set(.frags, 20),
@@ -130,6 +140,6 @@ noinline fn helper(e: Entity, amount: f32) callconv(.c) f32 {
 }
 
 pub export fn damage_twice(e: Entity, amount: f32) f32 {
-    _ = helper(e, amount);
-    return helper(e, amount * 2);
+    _ = @call(.never_tail, helper, .{ e, amount });
+    return @call(.always_tail, helper, .{ e, amount * 2 });
 }

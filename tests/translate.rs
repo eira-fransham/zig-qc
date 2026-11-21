@@ -125,6 +125,29 @@ fn field_errors() {
     assert!(err.contains("entity field offset must be a compile-time constant"), "{err}");
 }
 
+#[test]
+fn static_data() {
+    insta::assert_snapshot!(translate_wat("static_data.wat"));
+    check_compiles(&wat::parse_file(fixture("static_data.wat")).unwrap(), "");
+}
+
+#[test]
+fn static_data_errors() {
+    let base = r#"(import "env" "memory" (memory 1)) (import "env" "__memory_base" (global $b i32))"#;
+    let err = translate_err(&format!(
+        r#"(module {base} (data (global.get $b) "\00\00\00\00")
+            (func (export "f") (f32.store (global.get $b) (f32.const 1))))"#
+    ));
+    assert!(err.contains("writes to static data are not supported yet"), "{err}");
+    let err = translate_err(r#"(module (memory 1) (data (i32.const 64) "\01"))"#);
+    assert!(err.contains("is not relative to `__memory_base`"), "{err}");
+    let err = translate_err(&format!(
+        r#"(module {base} (data (global.get $b) "\00\00\00\00")
+            (func (export "f") (result f32) (f32.load offset=8 (global.get $b))))"#
+    ));
+    assert!(err.contains("outside of static data"), "{err}");
+}
+
 fn translate_err(wat: &str) -> String {
     let wasm = wat::parse_str(wat).unwrap();
     match wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default()) {

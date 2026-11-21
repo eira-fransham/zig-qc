@@ -18,10 +18,28 @@ entity() spawn = #14;
 void(vector, vector, float, entity) traceline = #16;
 float(vector) vlen = #12;
 
+// ---- static data accessors ----
+float __wasm_data_f32(float addr) {
+    if ((addr == 1048576)) {
+        return 10;
+    }
+    if ((addr == 1048580)) {
+        return 20;
+    }
+    if ((addr == 1048584)) {
+        return 40;
+    }
+    if ((addr == 1048588)) {
+        return 80;
+    }
+    return 0;
+}
+
 // ---- forward declarations ----
 float damage_twice(entity p0, float p1);
 float __wasm_f35(entity p0, float p1);
-void pick(entity p0, float p1);
+void pick_field(entity p0, float p1);
+float pick(float p0);
 float classify(float p0);
 float sum_to(float p0);
 entity builtins(string p0);
@@ -45,7 +63,7 @@ float __wasm_f35(entity p0, float p1) {
     return p0.health;
 }
 
-void pick(entity p0, float p1) {
+void pick_field(entity p0, float p1) {
     if ((p1 == 0)) {
         goto blk4;
     }
@@ -73,6 +91,16 @@ blk1:
     return;
 blk0:
     p0.nextthink = time;
+}
+
+float pick(float p0) {
+    local float t0;
+    if ((p0 <= 3)) {
+        t0 = __wasm_data_f32((1048576 + (p0 * 4)));
+    } else {
+        t0 = 0;
+    }
+    return t0;
 }
 
 float classify(float p0) {
