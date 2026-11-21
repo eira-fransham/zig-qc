@@ -50,17 +50,44 @@ fn rand_suffix() -> u64 {
 fn zig_test() {
     let wasm = std::fs::read(fixture("zig_test.wasm")).unwrap();
     insta::assert_snapshot!(translate_bytes(&wasm));
-    check_compiles(&wasm, "float(entity a, entity b, float c) doSomething = { return c; };\n");
+    check_compiles(&wasm, "");
 }
 
 #[test]
 fn control_flow() {
     insta::assert_snapshot!(translate_wat("control_flow.wat"));
-    check_compiles(&wat::parse_file(fixture("control_flow.wat")).unwrap(), "");
+    // `builtin` imports are prototypes; the defs supply the numbered builtin.
+    check_compiles(&wat::parse_file(fixture("control_flow.wat")).unwrap(), "float(float v) floor = #37;\n");
 }
 
 #[test]
 fn intrinsics() {
     insta::assert_snapshot!(translate_wat("intrinsics.wat"));
     check_compiles(&wat::parse_file(fixture("intrinsics.wat")).unwrap(), "");
+}
+
+fn translate_err(wat: &str) -> String {
+    let wasm = wat::parse_str(wat).unwrap();
+    match wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default()) {
+        Ok(_) => panic!("expected translation to fail"),
+        Err(e) => format!("{e:#}"),
+    }
+}
+
+#[test]
+fn unknown_env_import_is_an_error() {
+    let err = translate_err(r#"(module (import "env" "doSomething" (func (param f32))))"#);
+    assert!(err.contains("unknown import `env.doSomething`"), "{err}");
+}
+
+#[test]
+fn unknown_import_module_is_an_error() {
+    let err = translate_err(r#"(module (import "other" "foo" (func)))"#);
+    assert!(err.contains("unsupported import module `other`"), "{err}");
+}
+
+#[test]
+fn unknown_intrinsic_is_an_error() {
+    let err = translate_err(r#"(module (import "env" "__quakec_bogus" (func)))"#);
+    assert!(err.contains("unknown QuakeC intrinsic `__quakec_bogus`"), "{err}");
 }

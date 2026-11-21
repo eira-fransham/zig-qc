@@ -16,9 +16,14 @@ use crate::sysdefs::{self, GlobalMap};
 
 /// The name of the table LLVM uses to call `funcref`s.
 pub const CALL_TABLE: &str = "__funcref_call_table";
-/// Import module for functions that should become QuakeC builtins (`#0`,
-/// resolved by name by the engine).
+/// Import module for known builtins. These are emitted as plain prototypes;
+/// the defs (e.g. `defs.qc`) supply the actual `= #N` definitions.
 pub const BUILTIN_MODULE: &str = "builtin";
+/// Import module for builtins without a number. These are emitted as
+/// `= #0`, which the engine resolves by name.
+pub const UNNAMED_BUILTIN_MODULE: &str = "unnamed-builtin";
+/// Import module for memory, the call table and `__quakec_*` intrinsics.
+pub const ENV_MODULE: &str = "env";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Intrinsic {
@@ -60,10 +65,10 @@ impl Intrinsic {
 pub enum FuncKind {
     /// Defined in this module.
     Local,
-    /// Imported; defined in some other QuakeC source file.
-    Extern,
-    /// Imported from the `builtin` module; becomes `= #0`.
+    /// Imported from the `builtin` module; emitted as a prototype.
     Builtin,
+    /// Imported from the `unnamed-builtin` module; becomes `= #0`.
+    UnnamedBuiltin,
     Intrinsic(Intrinsic),
 }
 
@@ -168,14 +173,25 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                 let sig = ctx
                     .sig_of_type(ty)
                     .with_context(|| format!("in signature of import `{}`", import.name))?;
-                let kind = if import.module == BUILTIN_MODULE {
-                    FuncKind::Builtin
-                } else if let Some(i) = Intrinsic::from_name(&import.name) {
-                    FuncKind::Intrinsic(i)
-                } else if import.name.starts_with("__quakec_") {
-                    bail!("unknown QuakeC intrinsic `{}`", import.name);
-                } else {
-                    FuncKind::Extern
+                let kind = match import.module.as_str() {
+                    BUILTIN_MODULE => FuncKind::Builtin,
+                    UNNAMED_BUILTIN_MODULE => FuncKind::UnnamedBuiltin,
+                    ENV_MODULE => match Intrinsic::from_name(&import.name) {
+                        Some(i) => FuncKind::Intrinsic(i),
+                        None if import.name.starts_with("__quakec_") => {
+                            bail!("unknown QuakeC intrinsic `{}`", import.name)
+                        }
+                        None => bail!(
+                            "unknown import `{ENV_MODULE}.{}`; QuakeC builtins must be imported \
+                             from `{BUILTIN_MODULE}` or `{UNNAMED_BUILTIN_MODULE}`",
+                            import.name
+                        ),
+                    },
+                    other => bail!(
+                        "unsupported import module `{other}` (for `{}`); expected \
+                         `{ENV_MODULE}`, `{BUILTIN_MODULE}` or `{UNNAMED_BUILTIN_MODULE}`",
+                        import.name
+                    ),
                 };
                 ctx.funcs.insert(f, FuncInfo { name: import.name.clone(), sig, kind });
             }
@@ -268,7 +284,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     let mut imports: Vec<_> = ctx
         .funcs
         .values()
-        .filter(|f| matches!(f.kind, FuncKind::Extern | FuncKind::Builtin))
+        .filter(|f| matches!(f.kind, FuncKind::Builtin | FuncKind::UnnamedBuiltin))
         .collect();
     imports.sort_by(|a, b| a.name.cmp(&b.name));
     if !imports.is_empty() {
@@ -276,7 +292,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         for f in imports {
             let sig = f.sig.render(&mut tv);
             match f.kind {
-                FuncKind::Builtin => {
+                FuncKind::UnnamedBuiltin => {
                     let _ = writeln!(out, "{sig} {} = #0;", f.name);
                 }
                 _ => {

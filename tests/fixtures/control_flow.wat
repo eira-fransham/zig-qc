@@ -1,6 +1,7 @@
 (module
   (import "env" "memory" (memory 0))
-  (import "builtin" "sqrt" (func $sqrt (param f32) (result f32)))
+  (import "unnamed-builtin" "sqrt" (func $sqrt (param f32) (result f32)))
+  (import "builtin" "floor" (func $floor (param f32) (result f32)))
   ;; sum of 0..n via loop + br_if
   (func (export "sum") (param $n f32) (result f32)
     (local $i f32) (local $acc f32)
@@ -15,7 +16,7 @@
   (func (export "pick") (param $x f32) (result f32)
     (if (result f32) (f32.lt (local.get $x) (f32.const 0))
       (then (f32.neg (local.get $x)))
-      (else (call $sqrt (local.get $x)))))
+      (else (call $floor (call $sqrt (local.get $x))))))
   ;; br_table
   (func (export "classify") (param $x i32) (result f32)
     (block $c
