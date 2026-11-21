@@ -95,6 +95,23 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         l.emit(Stmt::Return(Some(v)));
     }
 
+    // Wasm locals start at zero, but QuakeC locals live in the globals area
+    // and (in vanilla engines) keep their value from the previous call.
+    let mut body: Vec<Stmt> = l
+        .local_decls
+        .iter()
+        .map(|(n, t)| {
+            let zero = match t {
+                Ty::Known(QcType::Float) => Expr::Float(0.0),
+                Ty::Known(QcType::Vector) => Expr::Vector([0.0; 3]),
+                _ => Expr::Null,
+            };
+            Stmt::Assign(Expr::Local(n.clone()), zero)
+        })
+        .collect();
+    body.append(&mut l.out);
+    l.out = body;
+
     let mut all_locals = l.local_decls;
     all_locals.extend(l.temps);
     Ok(Function { name, params, ret: sig.ret, locals: all_locals, body: l.out })
@@ -110,13 +127,48 @@ impl Lower<'_, '_> {
         self.ctx.tv.unify(a, b, what);
     }
 
+    /// Pop a value, turning any `MakeVector` into a real expression.
     fn pop(&mut self) -> Result<(Expr, Ty)> {
+        let (e, t) = self.pop_raw()?;
+        Ok((self.materialize(e), t))
+    }
+
+    /// Pop a value without materializing it (for lane operations).
+    fn pop_raw(&mut self) -> Result<(Expr, Ty)> {
         self.stack.pop().ok_or_else(|| anyhow!("wasm operand stack underflow"))
     }
 
     fn pop_n(&mut self, n: usize) -> Result<Vec<(Expr, Ty)>> {
         ensure!(self.stack.len() >= n, "wasm operand stack underflow");
-        Ok(self.stack.split_off(self.stack.len() - n))
+        let vals = self.stack.split_off(self.stack.len() - n);
+        Ok(vals.into_iter().map(|(e, t)| (self.materialize(e), t)).collect())
+    }
+
+    /// Materialize the value on top of the stack in place.
+    fn materialize_top(&mut self) {
+        if let Some((e @ Expr::MakeVector(_), _)) = self.stack.last_mut() {
+            let e = std::mem::replace(e, Expr::Null);
+            let e = self.materialize(e);
+            self.stack.last_mut().unwrap().0 = e;
+        }
+    }
+
+    /// Turn a `MakeVector` into an expression QuakeC can represent: a
+    /// literal, a whole vector global or field (if the components are its
+    /// `_x`/`_y`/`_z`), or else a temporary assigned component-wise.
+    fn materialize(&mut self, e: Expr) -> Expr {
+        let Expr::MakeVector(parts) = e else { return e };
+        if let [Expr::Float(x), Expr::Float(y), Expr::Float(z)] = *parts {
+            return Expr::Vector([x, y, z]);
+        }
+        if let Some(whole) = whole_vector(&parts) {
+            return whole;
+        }
+        let tmp = self.new_temp(Ty::Known(QcType::Vector));
+        for (i, p) in parts.into_iter().enumerate() {
+            self.emit(Stmt::Assign(Expr::Component(Box::new(Expr::Local(tmp.clone())), i as u8), p));
+        }
+        Expr::Local(tmp)
     }
 
     fn new_temp(&mut self, ty: Ty) -> String {
@@ -150,6 +202,11 @@ impl Lower<'_, '_> {
         for i in 0..self.stack.len() {
             if pred(&self.stack[i].0) {
                 let (e, t) = self.stack[i].clone();
+                let e = self.materialize(e);
+                if !pred(&e) {
+                    self.stack[i].0 = e;
+                    continue;
+                }
                 let tmp = self.new_temp(t);
                 self.emit(Stmt::Assign(Expr::Local(tmp.clone()), e));
                 self.stack[i].0 = Expr::Local(tmp);
@@ -277,6 +334,7 @@ impl Lower<'_, '_> {
             .get(&target)
             .ok_or_else(|| anyhow!("branch to unknown block"))?;
         self.labels[idx].used = true;
+        self.materialize_top();
         let mut stmts = Vec::new();
         match self.labels[idx].kind {
             LabelKind::Return => {
@@ -413,6 +471,7 @@ impl Lower<'_, '_> {
             }
             Instr::BrIf(ir::BrIf { block }) => {
                 let (cond, _) = self.pop()?;
+                self.materialize_top();
                 // The branch value (if any) is used twice: spill it.
                 if let Some((e, _)) = self.stack.last()
                     && !e.is_const()
@@ -542,11 +601,54 @@ impl Lower<'_, '_> {
                 self.stack.push((Expr::Float(f), Ty::Known(QcType::Float)));
                 Ok(true)
             }
+            Instr::Binop(ir::Binop { op: BinaryOp::F32x4ReplaceLane { idx } }) => {
+                let (x, _) = self.pop()?;
+                let (v, _) = self.pop_raw()?;
+                let e = self.replace_lane(v, *idx, x);
+                self.stack.push((e, Ty::Known(QcType::Vector)));
+                Ok(true)
+            }
+            Instr::Unop(ir::Unop { op: UnaryOp::F32x4ExtractLane { idx } }) => {
+                let (v, _) = self.pop_raw()?;
+                let e = self.extract_lane(v, *idx);
+                self.stack.push((e, Ty::Known(QcType::Float)));
+                Ok(true)
+            }
+            Instr::LoadSimd(ir::LoadSimd { kind, arg, .. }) => {
+                use ir::LoadSimdKind as K;
+                match kind {
+                    K::V128Load32Zero | K::V128Load64Zero => {
+                        let (addr, _) = self.pop()?;
+                        let n = if matches!(kind, K::V128Load32Zero) { 1 } else { 2 };
+                        let mut parts = [Expr::Float(0.0), Expr::Float(0.0), Expr::Float(0.0)];
+                        for (i, p) in parts.iter_mut().enumerate().take(n) {
+                            *p = Expr::Global(self.global_at(&addr, arg.offset + 4 * i as u64, QcType::Float)?);
+                        }
+                        self.stack.push((Expr::MakeVector(Box::new(parts)), Ty::Known(QcType::Vector)));
+                    }
+                    K::V128Load32Lane(lane) => {
+                        let (v, _) = self.pop_raw()?;
+                        let (addr, _) = self.pop()?;
+                        let x = Expr::Global(self.global_at(&addr, arg.offset, QcType::Float)?);
+                        let e = self.replace_lane(v, *lane, x);
+                        self.stack.push((e, Ty::Known(QcType::Vector)));
+                    }
+                    K::V128Store32Lane(lane) => {
+                        let (v, _) = self.pop_raw()?;
+                        let (addr, _) = self.pop()?;
+                        let g = self.global_at(&addr, arg.offset, QcType::Float)?;
+                        let x = self.extract_lane(v, *lane);
+                        self.spill_globals();
+                        self.emit(Stmt::Assign(Expr::Global(g), x));
+                    }
+                    other => bail!("unsupported SIMD memory access {other:?}"),
+                }
+                Ok(true)
+            }
             Instr::Binop(ir::Binop { op }) => {
                 let (b, _) = self.pop()?;
                 let (a, _) = self.pop()?;
                 let (e, t) = match *op {
-                    BinaryOp::F32x4ReplaceLane { idx } => (self.replace_lane(a, idx, b), QcType::Vector),
                     BinaryOp::F32x4Add => (Expr::Bin(BinOp::Add, Box::new(a), Box::new(b)), QcType::Vector),
                     BinaryOp::F32x4Sub => (Expr::Bin(BinOp::Sub, Box::new(a), Box::new(b)), QcType::Vector),
                     op => (lower_binop(op, a, b)?, QcType::Float),
@@ -557,7 +659,19 @@ impl Lower<'_, '_> {
             Instr::Unop(ir::Unop { op }) => {
                 let (a, _) = self.pop()?;
                 let (e, t) = match *op {
-                    UnaryOp::F32x4ExtractLane { idx } => (self.extract_lane(a, idx), QcType::Float),
+                    // Float → int truncation. `OP_BITOR` converts both operands
+                    // to int (truncating toward zero) and back. `x | 0` would
+                    // be folded away by fteqcc, but `x | x` is kept.
+                    UnaryOp::I32TruncSF32 | UnaryOp::I32TruncUF32 | UnaryOp::I32TruncSSatF32 | UnaryOp::I32TruncUSatF32 => {
+                        let e = match a {
+                            Expr::Float(f) => Expr::Float(f.trunc()),
+                            a => {
+                                let a = self.simple(a, Ty::Known(QcType::Float));
+                                Expr::Bin(BinOp::BitOr, Box::new(a.clone()), Box::new(a))
+                            }
+                        };
+                        (e, QcType::Float)
+                    }
                     UnaryOp::F32x4Splat => (self.splat(a), QcType::Vector),
                     UnaryOp::F32x4Neg => (Expr::Un(UnOp::Neg, Box::new(a)), QcType::Vector),
                     op => (lower_unop(op, a)?, QcType::Float),
@@ -677,6 +791,10 @@ impl Lower<'_, '_> {
             // The fourth lane doesn't exist in QuakeC.
             (_, 3..) => Expr::Float(0.0),
             (Expr::Vector(c), i) => Expr::Float(c[i as usize]),
+            (Expr::MakeVector(parts), i) => {
+                let [x, y, z] = *parts;
+                [x, y, z].into_iter().nth(i as usize).unwrap()
+            }
             (Expr::Field(e, name), i) => Expr::Field(e, format!("{name}_{}", ["x", "y", "z"][i as usize])),
             (v, i) => Expr::Component(Box::new(self.simple(v, Ty::Known(QcType::Vector))), i),
         }
@@ -686,17 +804,17 @@ impl Lower<'_, '_> {
         if idx >= 3 {
             return v;
         }
-        if let (Expr::Vector(c), Expr::Float(f)) = (&v, &x) {
-            let mut c = *c;
-            c[idx as usize] = *f;
-            return Expr::Vector(c);
-        }
-        // Copy into a fresh temporary (the original may still be in use),
-        // then overwrite the component.
-        let tmp = self.new_temp(Ty::Known(QcType::Vector));
-        self.emit(Stmt::Assign(Expr::Local(tmp.clone()), v));
-        self.emit(Stmt::Assign(Expr::Component(Box::new(Expr::Local(tmp.clone())), idx), x));
-        Expr::Local(tmp)
+        let mut parts = match v {
+            Expr::Vector([a, b, c]) => [Expr::Float(a), Expr::Float(b), Expr::Float(c)],
+            Expr::MakeVector(parts) => *parts,
+            v => {
+                // Split an existing vector into its components.
+                let v = self.simple(v, Ty::Known(QcType::Vector));
+                [0, 1, 2].map(|i| Expr::Component(Box::new(v.clone()), i))
+            }
+        };
+        parts[idx as usize] = x;
+        Expr::MakeVector(Box::new(parts))
     }
 
     fn splat(&mut self, x: Expr) -> Expr {
@@ -704,11 +822,7 @@ impl Lower<'_, '_> {
             return Expr::Vector([f; 3]);
         }
         let x = self.simple(x, Ty::Known(QcType::Float));
-        let tmp = self.new_temp(Ty::Known(QcType::Vector));
-        for i in 0..3 {
-            self.emit(Stmt::Assign(Expr::Component(Box::new(Expr::Local(tmp.clone())), i), x.clone()));
-        }
-        Expr::Local(tmp)
+        Expr::MakeVector(Box::new([x.clone(), x.clone(), x]))
     }
 
     fn field_name(&self, offset: &Expr, ty: QcType) -> Result<String> {
@@ -829,4 +943,35 @@ fn lower_unop(op: UnaryOp, a: Expr) -> Result<Expr> {
         F32ConvertSI32 | F32ConvertUI32 => a,
         other => bail!("unsupported unary operator {other:?}"),
     })
+}
+
+/// If `parts` are exactly the `_x`, `_y` and `_z` components of one vector
+/// global or vector field, return that whole vector.
+fn whole_vector(parts: &[Expr; 3]) -> Option<Expr> {
+    let base = |e: &Expr, suffix: &str| -> Option<(Option<Expr>, String)> {
+        match e {
+            Expr::Global(n) => Some((None, n.strip_suffix(suffix)?.to_string())),
+            Expr::Field(ent, n) => Some((Some((**ent).clone()), n.strip_suffix(suffix)?.to_string())),
+            _ => None,
+        }
+    };
+    let (ent, name) = base(&parts[0], "_x")?;
+    let same = |p: &Expr, suffix| {
+        base(p, suffix).is_some_and(|(e, n)| {
+            n == name
+                && match (&e, &ent) {
+                    (None, None) => true,
+                    (Some(Expr::Local(a)), Some(Expr::Local(b))) | (Some(Expr::Global(a)), Some(Expr::Global(b))) => a == b,
+                    _ => false,
+                }
+        })
+    };
+    if !(same(&parts[1], "_y") && same(&parts[2], "_z")) {
+        return None;
+    }
+    match ent {
+        None if crate::sysdefs::is_vector_global(&name) => Some(Expr::Global(name)),
+        Some(ent) if crate::sysdefs::is_vector_field(&name) => Some(Expr::Field(Box::new(ent), name)),
+        _ => None,
+    }
 }

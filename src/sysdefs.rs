@@ -173,6 +173,14 @@ pub const SYS_FIELDS: &[(&str, &str)] = &[
     ("string", "noise3"),
 ];
 
+pub fn is_vector_global(name: &str) -> bool {
+    SYS_GLOBALS.iter().any(|&(n, t)| n == name && t == SysTy::Vector)
+}
+
+pub fn is_vector_field(name: &str) -> bool {
+    SYS_FIELDS.iter().any(|&(t, n)| n == name && t == "vector")
+}
+
 /// Look up a system field by its QuakeC field offset. A float access to an
 /// offset inside a vector field refers to that component (e.g. `origin_y`).
 pub fn field_at(offset: u32, ty: QcType) -> Option<String> {

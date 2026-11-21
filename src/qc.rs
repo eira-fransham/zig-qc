@@ -197,6 +197,11 @@ pub enum Expr {
     /// An entity field, `ent.name`. The entity must be an `Expr::Local` or
     /// `Expr::Global`.
     Field(Box<Expr>, String),
+    /// A vector assembled from three float components. Only exists on the
+    /// lowering's operand stack, so that lane-by-lane construction can be
+    /// collapsed (e.g. into `v_forward`); it is always turned into another
+    /// expression before being emitted.
+    MakeVector(Box<[Expr; 3]>),
 }
 
 impl Expr {
@@ -209,6 +214,7 @@ impl Expr {
     pub fn reads_globals(&self) -> bool {
         match self {
             Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
+            Expr::MakeVector(parts) => parts.iter().any(Expr::reads_globals),
             Expr::Float(_) | Expr::Null | Expr::Local(_) | Expr::FuncName(_) | Expr::Vector(_) => {
                 false
             }
@@ -232,6 +238,7 @@ impl Expr {
                 a.reads_local(name) || b.reads_local(name) || c.reads_local(name)
             }
             Expr::Call(f, args) => f.reads_local(name) || args.iter().any(|a| a.reads_local(name)),
+            Expr::MakeVector(parts) => parts.iter().any(|p| p.reads_local(name)),
         }
     }
 
@@ -287,6 +294,7 @@ impl Expr {
                 e.render(tv, out);
                 let _ = write!(out, ".{name}");
             }
+            Expr::MakeVector(_) => unreachable!("MakeVector must be materialized before rendering"),
             Expr::Call(f, args) => {
                 f.render(tv, out);
                 out.push('(');

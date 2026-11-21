@@ -84,6 +84,14 @@ fn builtin_signature_mismatch_is_an_error() {
 }
 
 #[test]
+fn zig_stress_test() {
+    // `zig-src/zig-out/lib/stress-test.wasm`, built from `zig-src/src/stress-test.zig`.
+    let wasm = std::fs::read(fixture("zig_stress_test.wasm")).unwrap();
+    insta::assert_snapshot!(translate_bytes(&wasm));
+    check_compiles(&wasm, "");
+}
+
+#[test]
 fn zig_fields() {
     // Built from `zig_fields.zig` against `zig-src/src/defs.zig`.
     let wasm = std::fs::read(fixture("zig_fields.wasm")).unwrap();

@@ -16,6 +16,8 @@ float classify(float p0);
 float sum(float p0) {
     local float l0;
     local float l1;
+    l0 = 0;
+    l1 = 0;
 loop1:
     if ((l0 >= p0)) {
         goto blk0;

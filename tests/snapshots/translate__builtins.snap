@@ -19,6 +19,7 @@ void print_num(float p0);
 entity spawn_with_model(string p0) {
     local entity l0;
     local string t1;
+    l0 = __NULL__;
     l0 = spawn();
     t1 = precache_model(p0);
     setmodel(l0, t1);

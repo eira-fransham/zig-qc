@@ -20,6 +20,7 @@ void fields(entity p0, string p1);
 entity spawn_thing(string p0) {
     local entity l0;
     local entity t1;
+    l0 = __NULL__;
     l0 = spawn();
     setmodel(l0, p0);
     t1 = nextent(l0);
@@ -30,8 +31,9 @@ float aim_at(entity p0, float p1) {
     local vector t0;
     local vector t1;
     local float t2;
-    t0 = '0 2 3';
     t0_x = p1;
+    t0_y = 2;
+    t0_z = 3;
     t1 = normalize(t0);
     setorigin(p0, t1);
     t2 = vlen(p0.velocity);

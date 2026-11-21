@@ -137,9 +137,41 @@ pub const Entity = extern struct {
             else => @compileError("unsupported field type " ++ @typeName(field.Type())),
         }
     }
+
+    /// `a == b` (`EQ_E`).
+    pub inline fn eql(a: Self, b: Self) bool {
+        return __quakec_eq_entity(a.ref, b.ref);
+    }
+
+    /// `a != b` (`NE_E`).
+    pub inline fn neq(a: Self, b: Self) bool {
+        return __quakec_ne_entity(a.ref, b.ref);
+    }
+
+    /// `!e` (`NOT_ENT`): whether this is `world`/null.
+    pub inline fn isNull(this: Self) bool {
+        return __quakec_not_entity(this.ref);
+    }
 };
 pub const String = extern struct {
+    const Self = @This();
+
     ref: StringRef,
+
+    /// `a == b` (`EQ_S`), comparing contents.
+    pub inline fn eql(a: Self, b: Self) bool {
+        return __quakec_eq_string(a.ref, b.ref);
+    }
+
+    /// `a != b` (`NE_S`), comparing contents.
+    pub inline fn neq(a: Self, b: Self) bool {
+        return __quakec_ne_string(a.ref, b.ref);
+    }
+
+    /// `!s` (`NOT_S`): whether this is null or empty.
+    pub inline fn isNull(this: Self) bool {
+        return __quakec_not_string(this.ref);
+    }
 };
 
 const EntityRef = *addrspace(.externref) const struct {};
@@ -177,6 +209,15 @@ extern fn __quakec_store_entity_field_string(ent: EntityRef, field: u32, value: 
 extern fn __quakec_store_entity_field_entity(ent: EntityRef, field: u32, value: EntityRef) void;
 extern fn __quakec_store_entity_field_fn(ent: EntityRef, field: u32, value: Function) void;
 
+// Comparisons. Wasm can't compare `externref`s itself, and QuakeC needs the
+// type to pick the right opcode.
+extern fn __quakec_eq_entity(a: EntityRef, b: EntityRef) bool;
+extern fn __quakec_ne_entity(a: EntityRef, b: EntityRef) bool;
+extern fn __quakec_not_entity(e: EntityRef) bool;
+extern fn __quakec_eq_string(a: StringRef, b: StringRef) bool;
+extern fn __quakec_ne_string(a: StringRef, b: StringRef) bool;
+extern fn __quakec_not_string(s: StringRef) bool;
+
 extern fn __quakec_load_entity(ptr: *const volatile void) EntityRef;
 extern fn __quakec_load_string(ptr: *const volatile void) StringRef;
 extern fn __quakec_load_fn(ptr: *const volatile void) *addrspace(.funcref) const fn () callconv(.c) void;
@@ -213,6 +254,12 @@ pub fn Global(comptime T: type) type {
                         return .{ .ref = __quakec_load_entity(this.ptr) };
                     } else if (T == String) {
                         return .{ .ref = __quakec_load_string(this.ptr) };
+                    } else if (T == Vector) {
+                        // One volatile load per component, so that LLVM
+                        // doesn't merge them into a wider load spanning
+                        // several QuakeC globals.
+                        const c: *align(4) const volatile [3]f32 = @ptrCast(this.ptr);
+                        return .{ c[0], c[1], c[2] };
                     } else {
                         return this.ptr.*;
                     }
@@ -231,6 +278,12 @@ pub fn Global(comptime T: type) type {
                         __quakec_store_entity(this.ptr, value.ref);
                     } else if (T == String) {
                         __quakec_store_string(this.ptr, value.ref);
+                    } else if (T == Vector) {
+                        // See `get`.
+                        const c: *align(4) volatile [3]f32 = @ptrCast(this.ptr);
+                        c[0] = value[0];
+                        c[1] = value[1];
+                        c[2] = value[2];
                     } else {
                         this.ptr.* = value;
                     }
