@@ -1,0 +1,13 @@
+[package]
+name = "wasm-to-qc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+walrus = "0.26"
+
+[dev-dependencies]
+insta = "1"
+wat = "1"
