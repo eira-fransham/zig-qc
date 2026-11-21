@@ -13,29 +13,176 @@ comptime {
     );
 }
 
-pub const Entity = *addrspace(.externref) const struct {};
-pub const String = *addrspace(.externref) const struct {};
+/// The vanilla NetQuake system entity fields (`entvars_t`), named as in
+/// `defs.qc`. Each value is the field's QuakeC field offset, which is what
+/// the field intrinsics below pass to the converter. Vector fields take up
+/// three slots; access their components through the `Vector` instead.
+pub const Field = enum(u32) {
+    modelindex = 0,
+    absmin = 1,
+    absmax = 4,
+    ltime = 7,
+    movetype = 8,
+    solid = 9,
+    origin = 10,
+    oldorigin = 13,
+    velocity = 16,
+    angles = 19,
+    avelocity = 22,
+    punchangle = 25,
+    classname = 28,
+    model = 29,
+    frame = 30,
+    skin = 31,
+    effects = 32,
+    mins = 33,
+    maxs = 36,
+    size = 39,
+    touch = 42,
+    use = 43,
+    think = 44,
+    blocked = 45,
+    nextthink = 46,
+    groundentity = 47,
+    health = 48,
+    frags = 49,
+    weapon = 50,
+    weaponmodel = 51,
+    weaponframe = 52,
+    currentammo = 53,
+    ammo_shells = 54,
+    ammo_nails = 55,
+    ammo_rockets = 56,
+    ammo_cells = 57,
+    items = 58,
+    takedamage = 59,
+    chain = 60,
+    deadflag = 61,
+    view_ofs = 62,
+    button0 = 65,
+    button1 = 66,
+    button2 = 67,
+    impulse = 68,
+    fixangle = 69,
+    v_angle = 70,
+    idealpitch = 73,
+    netname = 74,
+    enemy = 75,
+    flags = 76,
+    colormap = 77,
+    team = 78,
+    max_health = 79,
+    teleport_time = 80,
+    armortype = 81,
+    armorvalue = 82,
+    waterlevel = 83,
+    watertype = 84,
+    ideal_yaw = 85,
+    yaw_speed = 86,
+    aiment = 87,
+    goalentity = 88,
+    spawnflags = 89,
+    target = 90,
+    targetname = 91,
+    dmg_take = 92,
+    dmg_save = 93,
+    dmg_inflictor = 94,
+    owner = 95,
+    movedir = 96,
+    message = 99,
+    sounds = 100,
+    noise = 101,
+    noise1 = 102,
+    noise2 = 103,
+    noise3 = 104,
+
+    pub fn Type(comptime this: @This()) type {
+        return switch (this) {
+            .modelindex, .ltime, .movetype, .solid, .frame, .skin, .effects, .nextthink, .health, .frags, .weapon, .weaponframe, .currentammo, .ammo_shells, .ammo_nails, .ammo_rockets, .ammo_cells, .items, .takedamage, .deadflag, .button0, .button1, .button2, .impulse, .fixangle, .idealpitch, .flags, .colormap, .team, .max_health, .teleport_time, .armortype, .armorvalue, .waterlevel, .watertype, .ideal_yaw, .yaw_speed, .spawnflags, .dmg_take, .dmg_save, .sounds => f32,
+            .absmin, .absmax, .origin, .oldorigin, .velocity, .angles, .avelocity, .punchangle, .mins, .maxs, .size, .view_ofs, .v_angle, .movedir => Vector,
+            .classname, .model, .weaponmodel, .netname, .target, .targetname, .message, .noise, .noise1, .noise2, .noise3 => String,
+            .groundentity, .chain, .enemy, .aiment, .goalentity, .dmg_inflictor, .owner => Entity,
+            .touch, .use, .think, .blocked => Function,
+        };
+    }
+};
+
+pub const Entity = extern struct {
+    const Self = @This();
+
+    ref: EntityRef,
+
+    // `inline` so that `field` reaches the intrinsic as an `i32.const`; the
+    // converter needs it to be a compile-time constant.
+    pub inline fn get(this: Self, comptime field: Field) field.Type() {
+        const offset = @backingInt(field);
+        return switch (field.Type()) {
+            f32 => __quakec_load_entity_field_float(this.ref, offset),
+            Vector => __quakec_load_entity_field_vector(this.ref, offset),
+            String => .{ .ref = __quakec_load_entity_field_string(this.ref, offset) },
+            Entity => .{ .ref = __quakec_load_entity_field_entity(this.ref, offset) },
+            Function => __quakec_load_entity_field_fn(this.ref, offset),
+            else => @compileError("unsupported field type " ++ @typeName(field.Type())),
+        };
+    }
+
+    pub inline fn set(this: Self, comptime field: Field, value: field.Type()) void {
+        const offset = @backingInt(field);
+        switch (field.Type()) {
+            f32 => __quakec_store_entity_field_float(this.ref, offset, value),
+            Vector => __quakec_store_entity_field_vector(this.ref, offset, value),
+            String => __quakec_store_entity_field_string(this.ref, offset, value.ref),
+            Entity => __quakec_store_entity_field_entity(this.ref, offset, value.ref),
+            Function => __quakec_store_entity_field_fn(this.ref, offset, value),
+            else => @compileError("unsupported field type " ++ @typeName(field.Type())),
+        }
+    }
+};
+pub const String = extern struct {
+    ref: StringRef,
+};
+
+const EntityRef = *addrspace(.externref) const struct {};
+const StringRef = *addrspace(.externref) const struct {};
 
 comptime {
-    if (Entity == String) unreachable;
+    if (Entity == String or EntityRef == StringRef) unreachable;
 }
 
 /// A QuakeC `vector`. With simd128 enabled this is passed as a `v128`.
 pub const Vector = @Vector(3, f32);
 
-/// A QuakeC field reference of type `.T` (e.g. `Field(String)` is `.string`).
-pub fn Field(comptime T: type) type {
+/// A QuakeC field reference of type `.T` (e.g. `EntityField(String)` is `.string`).
+pub fn EntityField(comptime T: type) type {
     return *addrspace(.externref) const struct {
         pub const Type = T;
     };
 }
 
-extern fn __quakec_load_entity(ptr: *const volatile void) Entity;
-extern fn __quakec_load_string(ptr: *const volatile void) String;
+/// A QuakeC function value (`void()`), as stored in globals and fields.
+pub const Function = *addrspace(.funcref) const fn () callconv(.c) void;
+
+// Entity field access. `field` is the field's offset (see `Field`), and must
+// be a compile-time constant. There is one intrinsic per type so the
+// converter can emit the correctly-typed load/store instruction.
+extern fn __quakec_load_entity_field_float(ent: EntityRef, field: u32) f32;
+extern fn __quakec_load_entity_field_vector(ent: EntityRef, field: u32) Vector;
+extern fn __quakec_load_entity_field_string(ent: EntityRef, field: u32) StringRef;
+extern fn __quakec_load_entity_field_entity(ent: EntityRef, field: u32) EntityRef;
+extern fn __quakec_load_entity_field_fn(ent: EntityRef, field: u32) Function;
+
+extern fn __quakec_store_entity_field_float(ent: EntityRef, field: u32, value: f32) void;
+extern fn __quakec_store_entity_field_vector(ent: EntityRef, field: u32, value: Vector) void;
+extern fn __quakec_store_entity_field_string(ent: EntityRef, field: u32, value: StringRef) void;
+extern fn __quakec_store_entity_field_entity(ent: EntityRef, field: u32, value: EntityRef) void;
+extern fn __quakec_store_entity_field_fn(ent: EntityRef, field: u32, value: Function) void;
+
+extern fn __quakec_load_entity(ptr: *const volatile void) EntityRef;
+extern fn __quakec_load_string(ptr: *const volatile void) StringRef;
 extern fn __quakec_load_fn(ptr: *const volatile void) *addrspace(.funcref) const fn () callconv(.c) void;
 
-extern fn __quakec_store_entity(ptr: *align(4) volatile void, ent: Entity) void;
-extern fn __quakec_store_string(ptr: *align(4) volatile void, ent: String) void;
+extern fn __quakec_store_entity(ptr: *align(4) volatile void, ent: EntityRef) void;
+extern fn __quakec_store_string(ptr: *align(4) volatile void, ent: StringRef) void;
 extern fn __quakec_store_fn(ptr: *align(4) volatile void, value: *addrspace(.funcref) const fn () callconv(.c) void) void;
 
 pub fn Global(comptime T: type) type {
@@ -56,39 +203,37 @@ pub fn Global(comptime T: type) type {
 
         pub inline fn get(this: *const Self) Ty {
             return switch (@typeInfo(T)) {
-                .pointer => {
-                    if (T == Entity) {
-                        return __quakec_load_entity(this.ptr);
-                    } else if (T == String) {
-                        return __quakec_load_string(this.ptr);
-                    } else {
-                        unreachable;
-                    }
-                },
                 .int => @intFromFloat(this.ptr.*),
                 .float => @as(T, this.ptr.*),
                 .bool => if (this.ptr.* == 0) false else true,
                 .@"fn" => @ptrCast(__quakec_load_fn(@ptrCast(this.ptr))),
-                else => this.ptr.*,
+                else => {
+                    if (T == Entity) {
+                        return .{ .ref = __quakec_load_entity(this.ptr) };
+                    } else if (T == String) {
+                        return .{ .ref = __quakec_load_string(this.ptr) };
+                    } else {
+                        this.ptr.*;
+                    }
+                },
             };
         }
 
         pub inline fn set(this: *const Self, value: Ty) void {
             return switch (@typeInfo(T)) {
-                .pointer => {
-                    if (T == Entity) {
-                        __quakec_store_entity(this.ptr, value);
-                    } else if (T == String) {
-                        __quakec_store_string(this.ptr, value);
-                    } else {
-                        unreachable;
-                    }
-                },
                 .int => this.ptr.* = @intFromFloat(value),
                 .float => this.ptr.* = @as(QCType, value),
                 .bool => this.ptr.* = if (value) 1 else 0,
                 .@"fn" => __quakec_store_fn(this.ptr, @ptrCast(value)),
-                else => this.ptr.* = value,
+                else => {
+                    if (T == Entity) {
+                        __quakec_store_entity(this.ptr, value.ref);
+                    } else if (T == String) {
+                        __quakec_store_string(this.ptr, value.ref);
+                    } else {
+                        this.ptr.* = value;
+                    }
+                },
             };
         }
     };
@@ -189,7 +334,7 @@ pub extern "builtin" fn spawn() Entity; // #14
 pub extern "builtin" fn remove(e: Entity) void; // #15
 pub extern "builtin" fn traceline(v1: Vector, v2: Vector, nomonsters: f32, forent: Entity) void; // #16
 pub extern "builtin" fn checkclient() Entity; // #17
-pub extern "builtin" fn find(start: Entity, fld: Field(String), match: String) Entity; // #18
+pub extern "builtin" fn find(start: Entity, fld: EntityField(String), match: String) Entity; // #18
 pub extern "builtin" fn precache_sound(s: String) String; // #19
 pub extern "builtin" fn precache_model(s: String) String; // #20
 pub extern "builtin" fn stuffcmd(client: Entity, s: String) void; // #21
