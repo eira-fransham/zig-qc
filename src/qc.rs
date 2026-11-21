@@ -126,6 +126,13 @@ pub struct Sig {
 }
 
 impl Sig {
+    /// `void()`, the type of QuakeC function globals and fields.
+    pub fn void() -> Self {
+        Sig { params: vec![], ret: Ty::Known(QcType::Void) }
+    }
+}
+
+impl Sig {
     pub fn render(&self, tv: &mut TypeVars) -> String {
         let params: Vec<_> = self.params.iter().map(|&p| tv.resolve(p).name()).collect();
         format!("{}({})", tv.resolve(self.ret).name(), params.join(", "))

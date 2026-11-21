@@ -24,7 +24,7 @@ void reset(entity p0, float p1) {
     t0_y = p1;
     t0_z = p1;
     p0.angles = t0;
-    p0.think = ((void())__wasm_think);
+    p0.think = __wasm_think;
 }
 
 string get_classname(entity p0) {

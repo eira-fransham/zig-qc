@@ -817,6 +817,17 @@ impl Lower<'_, '_> {
         Ok(())
     }
 
+    /// Cast a function value to `sig`, unless it already has that type: a
+    /// named function with that signature, or any other function value
+    /// (always `void()`) when `sig` is `void()`.
+    fn fn_cast(&self, sig: &Sig, f: Expr) -> Expr {
+        let own = match &f {
+            Expr::FuncName(n) => self.ctx.funcs.values().find(|i| i.name == *n).map(|i| i.sig.clone()),
+            _ => Some(Sig::void()),
+        };
+        if own.as_ref() == Some(sig) { f } else { Expr::FnCast(sig.clone(), Box::new(f)) }
+    }
+
     fn lower_call_indirect(&mut self, ty: walrus::TypeId, table: walrus::TableId) -> Result<()> {
         ensure!(Some(table) == self.ctx.call_table, "call_indirect on unsupported table");
         let (idx, _) = self.pop()?;
@@ -827,7 +838,7 @@ impl Lower<'_, '_> {
             .cloned()
             .ok_or_else(|| anyhow!("call_indirect through call table slot {idx}, which was not set"))?;
         let sig = self.ctx.sig_of_type(ty)?;
-        let callee = Expr::FnCast(sig.clone(), Box::new(f));
+        let callee = self.fn_cast(&sig, f);
         self.call(callee, &sig, "indirect call")
     }
 
@@ -952,7 +963,7 @@ impl Lower<'_, '_> {
                 self.unify(Ty::Known(qt), t, &format!("store to `{g}`"));
                 // Function globals are declared `void()`; cast named functions.
                 let v = match v {
-                    Expr::FuncName(_) => Expr::FnCast(Sig { params: vec![], ret: Ty::Known(QcType::Void) }, Box::new(v)),
+                    Expr::FuncName(_) => self.fn_cast(&Sig::void(), v),
                     v => v,
                 };
                 self.spill_globals();
@@ -985,7 +996,7 @@ impl Lower<'_, '_> {
                 let ent = self.simple(ent, Ty::Known(QcType::Entity));
                 let v = match v {
                     // Function fields are `void()`; cast named functions.
-                    Expr::FuncName(_) => Expr::FnCast(Sig { params: vec![], ret: Ty::Known(QcType::Void) }, Box::new(v)),
+                    Expr::FuncName(_) => self.fn_cast(&Sig::void(), v),
                     v => v,
                 };
                 self.spill_globals();

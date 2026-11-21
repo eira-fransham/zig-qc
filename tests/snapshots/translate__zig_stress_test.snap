@@ -222,7 +222,7 @@ void entity_fields(entity p0, string p1) {
 
 void function_globals() {
     StartFrame = main;
-    ((void())main)();
+    main();
     return;
 }
 

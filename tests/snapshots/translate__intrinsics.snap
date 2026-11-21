@@ -23,7 +23,7 @@ void set_other(entity p0) {
     } else {
         other = p0;
     }
-    StartFrame = ((void())__wasm_think);
+    StartFrame = __wasm_think;
 }
 
 float swap_time(float p0) {
