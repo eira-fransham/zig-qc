@@ -68,6 +68,21 @@ pub export fn comparisons(a: Entity, b: Entity, s: String) f32 {
     return score;
 }
 
+// ---- string literals ----
+
+/// String literals passed to builtins, stored in fields and compared.
+pub export fn string_literals(e: Entity) void {
+    _ = defs.precache_model(String.lit("progs/player.mdl"));
+    defs.dprint(String.lit("hello, \"world\"\n"));
+    e.set(.classname, String.lit("monster_ogre"));
+    if (e.get(.netname).eql(String.lit("player"))) defs.bprint(String.lit("tab\there \\ \x80\xff\n"));
+}
+
+/// A literal chosen at runtime (LLVM may select between the two addresses).
+pub export fn pick_string(x: bool) String {
+    return if (x) String.lit("yes") else String.lit("no");
+}
+
 // ---- builtins ----
 
 /// Builtins taking and returning entities, strings, vectors and floats.
@@ -139,7 +154,10 @@ noinline fn helper(e: Entity, amount: f32) callconv(.c) f32 {
     return e.get(.health);
 }
 
+/// The second call becomes a `return_call`. Not `@call(.always_tail, ...)`:
+/// Zig 0.17.1 rejects it (`noinline` is part of the function type), and
+/// without `noinline` it miscompiles the arguments.
 pub export fn damage_twice(e: Entity, amount: f32) f32 {
-    _ = @call(.never_tail, helper, .{ e, amount });
-    return @call(.always_tail, helper, .{ e, amount * 2 });
+    _ = helper(e, amount);
+    return helper(e, amount * 2);
 }

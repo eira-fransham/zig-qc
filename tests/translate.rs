@@ -173,3 +173,31 @@ fn unknown_intrinsic_is_an_error() {
     let err = translate_err(r#"(module (import "env" "__quakec_bogus" (func)))"#);
     assert!(err.contains("unknown QuakeC intrinsic `__quakec_bogus`"), "{err}");
 }
+
+#[test]
+fn string_literals() {
+    insta::assert_snapshot!(translate_wat("strings.wat"));
+    check_compiles(&wat::parse_file(fixture("strings.wat")).unwrap(), "");
+}
+
+#[test]
+fn string_literal_errors() {
+    let base = r#"(import "env" "memory" (memory 1)) (import "env" "__memory_base" (global $b i32))
+        (import "env" "__quakec_string_literal" (func $lit (param i32 i32) (result externref)))
+        (data (global.get $b) "abcd")"#;
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f") (param i32) (result externref)
+            (call $lit (i32.add (global.get $b) (local.get 0)) (i32.const 1))))"#
+    ));
+    assert!(err.contains("string literal address is not a constant"), "{err}");
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f") (param i32) (result externref)
+            (call $lit (global.get $b) (local.get 0))))"#
+    ));
+    assert!(err.contains("string literal length"), "{err}");
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f") (result externref)
+            (call $lit (global.get $b) (i32.const 5))))"#
+    ));
+    assert!(err.contains("outside of static data"), "{err}");
+}

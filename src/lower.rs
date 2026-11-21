@@ -6,7 +6,7 @@
 //! control flow). Calls are always assigned to a temporary immediately, since
 //! QuakeC return values live in `OFS_RETURN` and are clobbered by later calls.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use walrus::ir::{self, BinaryOp, Instr, InstrSeqId, InstrSeqType, LoadKind, StoreKind, UnaryOp, Value};
@@ -54,6 +54,8 @@ struct Lower<'a, 'm> {
     out: Vec<Stmt>,
     /// The most recent statement assigned a call result to this temporary.
     last_call_temp: Option<String>,
+    /// Locals that only ever hold `__memory_base` (see [`memory_base_locals`]).
+    base_locals: HashSet<LocalId>,
 }
 
 pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -> Result<Function> {
@@ -69,6 +71,7 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         params.push((n, ty));
     }
 
+    let base_locals = memory_base_locals(func, ctx.memory_base, &locals);
     let mut l = Lower {
         ctx,
         func,
@@ -84,6 +87,7 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         ret: sig.ret,
         out: Vec::new(),
         last_call_temp: None,
+        base_locals,
     };
 
     let entry = func.entry_block();
@@ -546,6 +550,15 @@ impl Lower<'_, '_> {
                 self.stack.push((Expr::Select(Box::new(c), Box::new(a), Box::new(b)), ta));
                 Ok(true)
             }
+            Instr::LocalGet(ir::LocalGet { local }) if self.base_locals.contains(local) => {
+                self.stack.push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
+                Ok(true)
+            }
+            Instr::LocalSet(ir::LocalSet { local }) if self.base_locals.contains(local) => {
+                self.pop()?;
+                Ok(true)
+            }
+            Instr::LocalTee(ir::LocalTee { local }) if self.base_locals.contains(local) => Ok(true),
             Instr::LocalGet(ir::LocalGet { local }) => {
                 let (n, t) = self.local(*local)?;
                 self.stack.push((Expr::Local(n), t));
@@ -877,6 +890,37 @@ impl Lower<'_, '_> {
             .ok_or_else(|| anyhow!("entity field offset {offset} is not a known {} field", ty.name()))
     }
 
+    /// The string literal of `len` bytes at `ptr`. Both must be constants,
+    /// or `select`s on the same condition between constants (LLVM sinks
+    /// `if (c) lit("a") else lit("bc")` into one call).
+    fn string_literal(&mut self, ptr: &Expr, len: &Expr) -> Result<Expr> {
+        match (ptr, len) {
+            (Expr::Select(c, a, b), Expr::Select(lc, la, lb)) if c == lc => {
+                Ok(Expr::Select(c.clone(), Box::new(self.string_literal(a, la)?), Box::new(self.string_literal(b, lb)?)))
+            }
+            (Expr::Select(c, a, b), Expr::Float(_)) => {
+                Ok(Expr::Select(c.clone(), Box::new(self.string_literal(a, len)?), Box::new(self.string_literal(b, len)?)))
+            }
+            (_, Expr::Float(_)) => {
+                let len = Self::const_i32(len, "string literal length")?;
+                ensure!(len >= 0, "negative string literal length {len}");
+                if len == 0 {
+                    // Zig may give `""` any address.
+                    return Ok(Expr::Str(Vec::new()));
+                }
+                let Expr::Float(a) = ptr else { bail!("string literal address is not a constant") };
+                let bytes = self
+                    .ctx
+                    .data
+                    .string(*a as u64, len as u64)
+                    .ok_or_else(|| anyhow!("string literal at address {a} is outside of static data"))?;
+                ensure!(!bytes.contains(&0), "string literal at address {a} contains a NUL byte");
+                Ok(Expr::Str(bytes))
+            }
+            _ => bail!("string literal length must be a constant, found `{len:?}`"),
+        }
+    }
+
     fn lower_call(&mut self, func: FunctionId) -> Result<()> {
         let info = self.ctx.funcs.get(&func).ok_or_else(|| anyhow!("call to unknown function"))?;
         let (name, sig, kind) = (info.name.clone(), info.sig.clone(), info.kind);
@@ -946,6 +990,12 @@ impl Lower<'_, '_> {
                 };
                 self.spill_globals();
                 self.emit(Stmt::Assign(Expr::Field(Box::new(ent), name), v));
+            }
+            StringLiteral => {
+                let (len, _) = self.pop()?;
+                let (ptr, _) = self.pop()?;
+                let s = self.string_literal(&ptr, &len)?;
+                self.stack.push((s, Ty::Known(QcType::String)));
             }
             NotString | NotEntity => {
                 let qt = if intr == NotString { QcType::String } else { QcType::Entity };
@@ -1052,4 +1102,35 @@ fn whole_vector(parts: &[Expr; 3]) -> Option<Expr> {
         Some(ent) if crate::sysdefs::is_vector_field(&name) => Some(Expr::Field(Box::new(ent), name)),
         _ => None,
     }
+}
+
+/// Locals whose every write is `global.get __memory_base` immediately
+/// followed by `local.set`/`local.tee`. LLVM often keeps the base in a local
+/// when it computes several data addresses; treating reads of it as the
+/// constant [`DATA_BASE`] keeps those addresses constant.
+fn memory_base_locals(
+    func: &LocalFunction,
+    memory_base: Option<walrus::GlobalId>,
+    params: &HashMap<LocalId, (String, Ty)>,
+) -> HashSet<LocalId> {
+    let Some(base) = memory_base else { return HashSet::new() };
+    let mut good = HashSet::new();
+    let mut bad = HashSet::new();
+    let mut seqs = vec![func.entry_block()];
+    while let Some(seq) = seqs.pop() {
+        let mut prev_is_base = false;
+        for (instr, _) in &func.block(seq).instrs {
+            match instr {
+                Instr::LocalSet(ir::LocalSet { local }) | Instr::LocalTee(ir::LocalTee { local }) => {
+                    if prev_is_base { &mut good } else { &mut bad }.insert(*local);
+                }
+                Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => seqs.push(*seq),
+                Instr::IfElse(ir::IfElse { consequent, alternative }) => seqs.extend([*consequent, *alternative]),
+                _ => {}
+            }
+            prev_is_base = matches!(instr, Instr::GlobalGet(ir::GlobalGet { global }) if *global == base);
+        }
+    }
+    good.retain(|l| !bad.contains(l) && !params.contains_key(l));
+    good
 }

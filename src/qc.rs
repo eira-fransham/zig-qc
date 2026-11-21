@@ -119,7 +119,7 @@ impl TypeVars {
 }
 
 /// A function signature (parameters and return), possibly with type variables.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Sig {
     pub params: Vec<Ty>,
     pub ret: Ty,
@@ -173,7 +173,7 @@ pub enum UnOp {
     Neg,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     Float(f32),
     Null,
@@ -191,6 +191,8 @@ pub enum Expr {
     Call(Box<Expr>, Vec<Expr>),
     /// A vector literal, `'x y z'`.
     Vector([f32; 3]),
+    /// A string literal, `"..."`. Never contains NUL bytes.
+    Str(Vec<u8>),
     /// A component (0..3) of a vector local or global, e.g. `v_x`. The inner
     /// expression must be an `Expr::Local` or `Expr::Global`.
     Component(Box<Expr>, u8),
@@ -206,7 +208,7 @@ pub enum Expr {
 
 impl Expr {
     pub fn is_const(&self) -> bool {
-        matches!(self, Expr::Float(_) | Expr::Null | Expr::FuncName(_) | Expr::Vector(_))
+        matches!(self, Expr::Float(_) | Expr::Null | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_))
     }
 
     /// Whether evaluating this expression reads mutable global state (and so
@@ -215,7 +217,7 @@ impl Expr {
         match self {
             Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
             Expr::MakeVector(parts) => parts.iter().any(Expr::reads_globals),
-            Expr::Float(_) | Expr::Null | Expr::Local(_) | Expr::FuncName(_) | Expr::Vector(_) => {
+            Expr::Float(_) | Expr::Null | Expr::Local(_) | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_) => {
                 false
             }
             Expr::Bin(_, a, b) => a.reads_globals() || b.reads_globals(),
@@ -227,7 +229,7 @@ impl Expr {
     pub fn reads_local(&self, name: &str) -> bool {
         match self {
             Expr::Local(n) => n == name,
-            Expr::Float(_) | Expr::Null | Expr::Global(_) | Expr::FuncName(_) | Expr::Vector(_) => {
+            Expr::Float(_) | Expr::Null | Expr::Global(_) | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_) => {
                 false
             }
             Expr::Bin(_, a, b) => a.reads_local(name) || b.reads_local(name),
@@ -252,6 +254,7 @@ impl Expr {
                 }
             }
             Expr::Null => out.push_str("__NULL__"),
+            Expr::Str(bytes) => render_str(bytes, out),
             Expr::Local(n) | Expr::Global(n) | Expr::FuncName(n) => out.push_str(n),
             Expr::Bin(op, a, b) => {
                 out.push('(');
@@ -407,4 +410,24 @@ impl Function {
         }
         out.push_str("}\n");
     }
+}
+
+/// Render a string literal for fteqcc. Printable ASCII is written as is,
+/// everything else is escaped. fteqcc's `\x` takes exactly two hex digits.
+fn render_str(bytes: &[u8], out: &mut String) {
+    out.push('"');
+    for &b in bytes {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\t' => out.push_str("\\t"),
+            b'\r' => out.push_str("\\r"),
+            0x20..=0x7e => out.push(b as char),
+            _ => {
+                let _ = write!(out, "\\x{b:02x}");
+            }
+        }
+    }
+    out.push('"');
 }

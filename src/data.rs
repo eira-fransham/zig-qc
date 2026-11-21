@@ -7,6 +7,8 @@
 //! tables LLVM makes from `switch`es) call a generated accessor function that
 //! binary-searches the data.
 
+use std::ops::Range;
+
 use anyhow::{Result, bail};
 use walrus::ir::{ExtendedLoad, LoadKind};
 use walrus::{ConstExpr, ConstOp, GlobalId, Module};
@@ -76,6 +78,9 @@ impl DataKind {
 #[derive(Default)]
 pub struct StaticData {
     bytes: Vec<u8>,
+    /// Absolute address ranges read as string literals. Accessors leave these
+    /// out: string bytes are only read whole, by `__quakec_string_literal`.
+    strings: Vec<Range<u64>>,
 }
 
 impl StaticData {
@@ -99,7 +104,7 @@ impl StaticData {
         if DATA_BASE + bytes.len() as u64 >= 1 << 24 {
             bail!("too much static data ({} bytes)", bytes.len());
         }
-        Ok(Self { bytes })
+        Ok(Self { bytes, strings: Vec::new() })
     }
 
     /// Whether `addr` falls in the static data region (or past it, which is
@@ -115,11 +120,23 @@ impl StaticData {
         Some(kind.decode(b))
     }
 
+    /// Read the `len` bytes of a string literal at an absolute address, and
+    /// remember that they are string data.
+    pub fn string(&mut self, addr: u64, len: u64) -> Option<Vec<u8>> {
+        let start = usize::try_from(addr.checked_sub(DATA_BASE)?).ok()?;
+        let bytes = self.bytes.get(start..start.checked_add(usize::try_from(len).ok()?)?)?.to_vec();
+        self.strings.push(addr..addr + len);
+        Some(bytes)
+    }
+
     /// Generate `float __wasm_data_<kind>(float addr)`: a binary search over
-    /// every aligned address, returning 0 for anything else.
+    /// every aligned address outside of string literals, returning 0 for
+    /// anything else.
     pub fn accessor(&self, kind: DataKind) -> Function {
+        let in_string = |a: u64| self.strings.iter().any(|r| a < r.end && r.start < a + kind.size());
         let entries: Vec<(f32, f32)> = (0..self.bytes.len() as u64 / kind.size())
             .map(|i| DATA_BASE + i * kind.size())
+            .filter(|&a| !in_string(a))
             .map(|a| (a as f32, self.read(a, kind).unwrap()))
             .collect();
         let mut body = search(&entries);

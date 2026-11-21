@@ -41,6 +41,8 @@ pub enum Intrinsic {
     NeEntity,
     NotString,
     NotEntity,
+    /// `__quakec_string_literal(ptr, len)`
+    StringLiteral,
     /// `__quakec_load_entity_field_<ty>(ent, field)`
     LoadField(QcType),
     /// `__quakec_store_entity_field_<ty>(ent, field, value)`
@@ -62,6 +64,7 @@ impl Intrinsic {
             "__quakec_ne_entity" => Self::NeEntity,
             "__quakec_not_string" => Self::NotString,
             "__quakec_not_entity" => Self::NotEntity,
+            "__quakec_string_literal" => Self::StringLiteral,
             _ => {
                 let (load, ty) = if let Some(t) = name.strip_prefix("__quakec_load_entity_field_") {
                     (true, t)

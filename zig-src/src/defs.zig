@@ -3,6 +3,8 @@
 //! Each global lives at `slot * 4` in linear memory, which wasm-to-qc maps
 //! back onto the QuakeC global with the same name.
 
+const std = @import("std");
+
 // HACK: Workaround for some jankiness with LLVM.
 comptime {
     asm (
@@ -172,6 +174,15 @@ pub const String = extern struct {
     pub inline fn isNull(this: Self) bool {
         return __quakec_not_string(this.ref);
     }
+
+    /// A string literal, e.g. `String.lit("progs/player.mdl")`. The bytes
+    /// are placed in static data and the converter emits a QuakeC `"..."`.
+    pub inline fn lit(comptime s: []const u8) String {
+        comptime {
+            if (std.mem.indexOfScalar(u8, s, 0) != null) @compileError("QuakeC strings can't contain NUL bytes");
+        }
+        return .{ .ref = __quakec_string_literal(s.ptr, s.len) };
+    }
 };
 
 const EntityRef = *addrspace(.externref) const struct {};
@@ -217,6 +228,10 @@ extern fn __quakec_not_entity(e: EntityRef) bool;
 extern fn __quakec_eq_string(a: StringRef, b: StringRef) bool;
 extern fn __quakec_ne_string(a: StringRef, b: StringRef) bool;
 extern fn __quakec_not_string(s: StringRef) bool;
+
+// A string literal. `ptr` must be a constant address in static data and `len`
+// a constant; the converter reads the bytes and emits a QuakeC literal.
+extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) StringRef;
 
 extern fn __quakec_load_entity(ptr: *const volatile void) EntityRef;
 extern fn __quakec_load_string(ptr: *const volatile void) StringRef;
