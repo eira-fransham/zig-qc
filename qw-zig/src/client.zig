@@ -85,7 +85,7 @@ pub export fn SetNewParms() void {
     q.parm9.set(0);
 }
 
-pub export fn DecodeLevelParms() void {
+pub fn DecodeLevelParms() callconv(.c) void {
     const self = q.me();
     if (q.serverflags.get() != 0) {
         if (q.world.get().get(.model).eql(S("maps/start.bsp")))
@@ -106,7 +106,7 @@ pub export fn DecodeLevelParms() void {
 /// FindIntermission
 ///
 /// Returns the entity to view from
-pub export fn FindIntermission() Entity {
+pub fn FindIntermission() callconv(.c) Entity {
     const classname = q.fieldRef(.classname);
 
     // look for info_intermission first
@@ -132,7 +132,7 @@ pub export fn FindIntermission() Entity {
     return q.world.get();
 }
 
-pub export fn GotoNextMap() void {
+pub fn GotoNextMap() callconv(.c) void {
     //ZOID: 12-13-96, samelevel is overloaded, only 1 works for same level
 
     if (q.cvar(S("samelevel")) == 1) { // if samelevel is set, stay on same level
@@ -152,7 +152,7 @@ pub export fn GotoNextMap() void {
 /// IntermissionThink
 ///
 /// When the player presses attack or jump, change to the next level
-pub export fn IntermissionThink() void {
+pub fn IntermissionThink() callconv(.c) void {
     const self = q.me();
     if (q.time.get() < intermission_exittime.get())
         return;
@@ -167,7 +167,7 @@ pub export fn IntermissionThink() void {
 ///
 /// The global "nextmap" has been set previously.
 /// Take the players to the intermission spot
-pub export fn execute_changelevel() void {
+pub fn execute_changelevel() callconv(.c) void {
     intermission_running.set(1);
 
     // enforce a wait time before allowing changelevel
@@ -200,7 +200,7 @@ pub export fn execute_changelevel() void {
     }
 }
 
-pub export fn changelevel_touch() void {
+pub fn changelevel_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -250,7 +250,7 @@ pub export fn trigger_changelevel() void {
 // =============================================================================
 
 /// called by ClientKill and DeadThink
-pub export fn respawn() void {
+pub fn respawn() callconv(.c) void {
     // make a copy of the dead body for appearances sake
     world.CopyToBodyQue(q.me());
     // set default spawn parms
@@ -273,7 +273,7 @@ pub export fn ClientKill() void {
     respawn();
 }
 
-pub export fn CheckSpawnPoint(v: Vector) f32 {
+pub fn CheckSpawnPoint(v: Vector) callconv(.c) f32 {
     _ = v;
     return q.FALSE;
 }
@@ -281,7 +281,7 @@ pub export fn CheckSpawnPoint(v: Vector) f32 {
 /// SelectSpawnPoint
 ///
 /// Returns the entity to spawn at
-pub export fn SelectSpawnPoint() Entity {
+pub fn SelectSpawnPoint() callconv(.c) Entity {
     const classname = q.fieldRef(.classname);
     var numspots: f32 = 0;
     var totalspots: f32 = 0;
@@ -350,7 +350,7 @@ pub export fn SelectSpawnPoint() Entity {
 /// (The whole body is commented out in the original, which then returns 0.
 /// It used `serverinfo` and `masterinfo` builtins that QuakeWorld doesn't
 /// have.)
-pub export fn ValidateUser(e: Entity) f32 {
+pub fn ValidateUser(e: Entity) callconv(.c) f32 {
     _ = e;
     return q.FALSE;
 }
@@ -499,7 +499,7 @@ pub export fn info_player_coop() void {}
 // ===============================================================================
 
 /// go to the next level for deathmatch
-pub export fn NextLevel() void {
+pub fn NextLevel() callconv(.c) void {
     if (nextmap.get().neq(S("")))
         return; // already done
 
@@ -544,7 +544,7 @@ pub export fn NextLevel() void {
 /// CheckRules
 ///
 /// Exit deathmatch games upon conditions
-pub export fn CheckRules() void {
+pub fn CheckRules() callconv(.c) void {
     const self = q.me();
     if (q.timelimit.get() != 0 and q.time.get() >= q.timelimit.get())
         NextLevel();
@@ -555,7 +555,7 @@ pub export fn CheckRules() void {
 
 //============================================================================
 
-pub export fn PlayerDeathThink() void {
+pub fn PlayerDeathThink() callconv(.c) void {
     const self = q.me();
 
     if (q.has(self.get(.flags), q.FL_ONGROUND)) {
@@ -586,7 +586,7 @@ pub export fn PlayerDeathThink() void {
     respawn();
 }
 
-pub export fn PlayerJump() void {
+pub fn PlayerJump() callconv(.c) void {
     const self = q.me();
 
     if (q.has(self.get(.flags), q.FL_WATERJUMP))
@@ -622,7 +622,7 @@ pub export fn PlayerJump() void {
 /// WaterMove
 pub const dmgtime = q.userField(f32, "dmgtime");
 
-pub export fn WaterMove() void {
+pub fn WaterMove() callconv(.c) void {
     const self = q.me();
     const time = q.time.get();
 
@@ -692,7 +692,7 @@ pub export fn WaterMove() void {
     }
 }
 
-pub export fn CheckWaterJump() void {
+pub fn CheckWaterJump() callconv(.c) void {
     const self = q.me();
 
     // check for a jump-out-of-water
@@ -770,7 +770,7 @@ pub export fn PlayerPreThink() void {
 /// CheckPowerups
 ///
 /// Check for turning off powerups
-pub export fn CheckPowerups() void {
+pub fn CheckPowerups() callconv(.c) void {
     const self = q.me();
     const time = q.time.get();
 
@@ -975,7 +975,7 @@ pub export fn ClientDisconnect() void {
 /// ClientObituary
 ///
 /// called when a player dies
-pub export fn ClientObituary(targ: Entity, attacker: Entity) void {
+pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
     const M = q.PRINT_MEDIUM;
 
     var rnum = q.random();

@@ -337,7 +337,7 @@ pub export fn bodyque() void {
     // creates bodyques
 }
 
-pub export fn InitBodyQue() void {
+pub fn InitBodyQue() callconv(.c) void {
     const head = q.spawn();
     bodyque_head.set(head);
     head.set(.classname, S("bodyque"));
@@ -352,7 +352,7 @@ pub export fn InitBodyQue() void {
 
 /// make a body que entry for the given ent so the ent can be
 /// respawned elsewhere
-pub export fn CopyToBodyQue(ent: Entity) void {
+pub fn CopyToBodyQue(ent: Entity) callconv(.c) void {
     const head = bodyque_head.get();
     head.set(.angles, ent.get(.angles));
     head.set(.model, ent.get(.model));

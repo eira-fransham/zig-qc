@@ -45,7 +45,7 @@ pub export fn SpectatorDisconnect() void {
 /// SpectatorImpulseCommand
 ///
 /// Called by SpectatorThink if the spectator entered an impulse
-pub export fn SpectatorImpulseCommand() void {
+pub fn SpectatorImpulseCommand() callconv(.c) void {
     const self = q.me();
     if (self.get(.impulse) == 1) {
         // teleport the spectator to the next spawn point

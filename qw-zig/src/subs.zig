@@ -12,9 +12,9 @@ const S = q.S;
 const Entity = q.Entity;
 const Vector = q.Vector;
 
-pub export fn SUB_Null() void {}
+pub fn SUB_Null() callconv(.c) void {}
 
-pub export fn SUB_Remove() void {
+pub fn SUB_Remove() callconv(.c) void {
     q.remove(q.me());
 }
 
@@ -22,7 +22,7 @@ pub export fn SUB_Remove() void {
 /// are just constant angles.
 ///
 /// (Declared `vector()` in the original, but it never returns a value.)
-pub export fn SetMovedir() void {
+pub fn SetMovedir() callconv(.c) void {
     const self = q.me();
     if (q.veq(self.get(.angles), q.vec(0, -1, 0))) {
         self.set(.movedir, q.vec(0, 0, 1));
@@ -37,7 +37,7 @@ pub export fn SetMovedir() void {
 }
 
 /// InitTrigger
-pub export fn InitTrigger() void {
+pub fn InitTrigger() callconv(.c) void {
     const self = q.me();
     // trigger angles are used for one-way touches.  An angle of 0 is assumed
     // to mean no restrictions, so use a yaw of 360 instead.
@@ -54,7 +54,7 @@ pub export fn InitTrigger() void {
 ///
 /// calculate self.velocity and self.nextthink to reach dest from
 /// self.origin traveling at speed
-pub export fn SUB_CalcMoveEnt(ent: Entity, tdest: Vector, tspeed: f32, func: q.Function) void {
+pub fn SUB_CalcMoveEnt(ent: Entity, tdest: Vector, tspeed: f32, func: q.Function) callconv(.c) void {
     const stemp = q.self.get();
     q.self.set(ent);
 
@@ -62,7 +62,7 @@ pub export fn SUB_CalcMoveEnt(ent: Entity, tdest: Vector, tspeed: f32, func: q.F
     q.self.set(stemp);
 }
 
-pub export fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) void {
+pub fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) callconv(.c) void {
     const self = q.me();
 
     if (tspeed == 0)
@@ -98,7 +98,7 @@ pub export fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) void {
 }
 
 /// After moving, set origin to exact final destination
-pub export fn SUB_CalcMoveDone() void {
+pub fn SUB_CalcMoveDone() callconv(.c) void {
     const self = q.me();
     q.setorigin(self, self.get(q.finaldest));
     self.set(.velocity, q.vec(0, 0, 0));
@@ -113,14 +113,14 @@ pub export fn SUB_CalcMoveDone() void {
 /// self.angles rotating
 ///
 /// The calling function should make sure self.think is valid
-pub export fn SUB_CalcAngleMoveEnt(ent: Entity, destangle: Vector, tspeed: f32, func: q.Function) void {
+pub fn SUB_CalcAngleMoveEnt(ent: Entity, destangle: Vector, tspeed: f32, func: q.Function) callconv(.c) void {
     const stemp = q.self.get();
     q.self.set(ent);
     SUB_CalcAngleMove(destangle, tspeed, func);
     q.self.set(stemp);
 }
 
-pub export fn SUB_CalcAngleMove(destangle: Vector, tspeed: f32, func: q.Function) void {
+pub fn SUB_CalcAngleMove(destangle: Vector, tspeed: f32, func: q.Function) callconv(.c) void {
     const self = q.me();
 
     if (tspeed == 0)
@@ -147,7 +147,7 @@ pub export fn SUB_CalcAngleMove(destangle: Vector, tspeed: f32, func: q.Function
 }
 
 /// After rotating, set angle to exact final angle
-pub export fn SUB_CalcAngleMoveDone() void {
+pub fn SUB_CalcAngleMoveDone() callconv(.c) void {
     const self = q.me();
     self.set(.angles, self.get(q.finalangle));
     self.set(.avelocity, q.vec(0, 0, 0));
@@ -158,7 +158,7 @@ pub export fn SUB_CalcAngleMoveDone() void {
 
 //=============================================================================
 
-pub export fn DelayThink() void {
+pub fn DelayThink() callconv(.c) void {
     const self = q.me();
     q.activator.set(self.get(.enemy));
     SUB_UseTargets();
@@ -180,7 +180,7 @@ pub export fn DelayThink() void {
 ///
 /// Search for (string)targetname in all entities that match
 /// (string)self.target and call their .use function
-pub export fn SUB_UseTargets() void {
+pub fn SUB_UseTargets() callconv(.c) void {
     const self = q.me();
 
     //

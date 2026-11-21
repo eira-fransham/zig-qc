@@ -90,7 +90,7 @@ pub export fn event_lightning() void {
 ///
 /// Something has bumped into a movetarget.  If it is a monster
 /// moving towards it, change the next destination and continue.
-pub export fn t_movetarget() void {
+pub fn t_movetarget() callconv(.c) void {
     if (q.other.get().get(q.movetarget).neq(q.me()))
         return;
 
@@ -117,7 +117,7 @@ pub export fn t_movetarget() void {
     }
 }
 
-pub export fn movetarget_f() void {
+pub fn movetarget_f() callconv(.c) void {
     const self = q.me();
     if (self.get(.targetname).isNull())
         q.objerror(S("monster_movetarget: no targetname"));

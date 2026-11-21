@@ -14,7 +14,7 @@ const S = q.S;
 
 const subs = @import("subs.zig");
 
-pub export fn button_wait() void {
+pub fn button_wait() callconv(.c) void {
     const self = q.me();
     self.set(q.state, q.STATE_TOP);
     self.set(.nextthink, self.get(.ltime) + self.get(q.wait));
@@ -24,11 +24,11 @@ pub export fn button_wait() void {
     self.set(.frame, 1); // use alternate textures
 }
 
-pub export fn button_done() void {
+pub fn button_done() callconv(.c) void {
     q.me().set(q.state, q.STATE_BOTTOM);
 }
 
-pub export fn button_return() void {
+pub fn button_return() callconv(.c) void {
     const self = q.me();
     self.set(q.state, q.STATE_DOWN);
     subs.SUB_CalcMove(self.get(q.pos1), self.get(q.speed), q.func(button_done));
@@ -37,11 +37,11 @@ pub export fn button_return() void {
         self.set(.takedamage, q.DAMAGE_YES); // can be shot again
 }
 
-pub export fn button_blocked() void {
+pub fn button_blocked() callconv(.c) void {
     // do nothing, just don't ome all the way back out
 }
 
-pub export fn button_fire() void {
+pub fn button_fire() callconv(.c) void {
     const self = q.me();
     if (self.get(q.state) == q.STATE_UP or self.get(q.state) == q.STATE_TOP)
         return;
@@ -52,12 +52,12 @@ pub export fn button_fire() void {
     subs.SUB_CalcMove(self.get(q.pos2), self.get(q.speed), q.func(button_wait));
 }
 
-pub export fn button_use() void {
+pub fn button_use() callconv(.c) void {
     q.me().set(.enemy, q.activator.get());
     button_fire();
 }
 
-pub export fn button_touch() void {
+pub fn button_touch() callconv(.c) void {
     const other = q.other.get();
     if (other.get(.classname).neq(S("player")))
         return;
@@ -65,7 +65,7 @@ pub export fn button_touch() void {
     button_fire();
 }
 
-pub export fn button_killed() void {
+pub fn button_killed() callconv(.c) void {
     const self = q.me();
     self.set(.enemy, q.damage_attacker.get());
     self.set(.health, self.get(.max_health));

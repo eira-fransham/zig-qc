@@ -17,7 +17,7 @@ const weapons = @import("weapons.zig");
 // ALL LIGHTS SHOULD BE 0 1 0 IN COLOR ALL OTHER ITEMS SHOULD
 // BE .8 .3 .4 IN COLOR
 
-pub export fn SUB_regen() void {
+pub fn SUB_regen() callconv(.c) void {
     const self = q.me();
     self.set(.model, self.get(q.mdl)); // restore original model
     self.set(.solid, q.SOLID_TRIGGER); // allow it to be touched again
@@ -35,7 +35,7 @@ pub export fn noclass() void {
     q.remove(self);
 }
 
-pub export fn q_touch() void {
+pub fn q_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -76,7 +76,7 @@ pub export fn q_touch() void {
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
-pub export fn DropQuad(timeleft: f32) void {
+pub fn DropQuad(timeleft: f32) callconv(.c) void {
     const self = q.me();
     const item = q.spawn();
     item.set(.origin, self.get(.origin));
@@ -99,7 +99,7 @@ pub export fn DropQuad(timeleft: f32) void {
     item.set(.think, q.func(subs.SUB_Remove));
 }
 
-pub export fn r_touch() void {
+pub fn r_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -129,7 +129,7 @@ pub export fn r_touch() void {
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
-pub export fn DropRing(timeleft: f32) void {
+pub fn DropRing(timeleft: f32) callconv(.c) void {
     const self = q.me();
     const item = q.spawn();
     item.set(.origin, self.get(.origin));
@@ -154,7 +154,7 @@ pub export fn DropRing(timeleft: f32) void {
 /// PlaceItem
 ///
 /// plants the object on the floor
-pub export fn PlaceItem() void {
+pub fn PlaceItem() callconv(.c) void {
     const self = q.me();
 
     self.set(q.mdl, self.get(.model)); // so it can be restored on respawn
@@ -178,7 +178,7 @@ pub export fn PlaceItem() void {
 /// StartItem
 ///
 /// Sets the clipping size and plants the object on the floor
-pub export fn StartItem() void {
+pub fn StartItem() callconv(.c) void {
     const self = q.me();
     self.set(.nextthink, q.time.get() + 0.2); // items start after other solids
     self.set(.think, q.func(PlaceItem));
@@ -192,7 +192,7 @@ pub export fn StartItem() void {
 
 /// T_Heal: add health to an entity, limiting health to max_health
 /// "ignore" will ignore max_health limit
-pub export fn T_Heal(e: Entity, healamount_: f32, ignore: f32) f32 {
+pub fn T_Heal(e: Entity, healamount_: f32, ignore: f32) callconv(.c) f32 {
     const other = q.other.get();
     if (e.get(.health) <= 0)
         return 0;
@@ -252,7 +252,7 @@ pub export fn item_health() void {
     StartItem();
 }
 
-pub export fn health_touch() void {
+pub fn health_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -305,7 +305,7 @@ pub export fn health_touch() void {
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
-pub export fn item_megahealth_rot() void {
+pub fn item_megahealth_rot() callconv(.c) void {
     const self = q.me();
     q.other.set(self.get(.owner));
     const other = q.other.get();
@@ -332,7 +332,7 @@ pub export fn item_megahealth_rot() void {
 //
 // ===============================================================================
 
-pub export fn armor_touch() void {
+pub fn armor_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     var armortype: f32 = 0;
@@ -406,7 +406,7 @@ pub export fn item_armor2() void {
 }
 
 /// QUAKED item_armorInv (0 .5 .8) (-16 -16 0) (16 16 32)
-pub export fn item_armorInv() void {
+pub fn item_armorInv() callconv(.c) void {
     armorItem(2);
 }
 
@@ -416,7 +416,7 @@ pub export fn item_armorInv() void {
 //
 // ===============================================================================
 
-pub export fn bound_other_ammo() void {
+pub fn bound_other_ammo() callconv(.c) void {
     const other = q.other.get();
     if (other.get(.ammo_shells) > 100)
         other.set(.ammo_shells, 100);
@@ -428,7 +428,7 @@ pub export fn bound_other_ammo() void {
         other.set(.ammo_cells, 100);
 }
 
-pub export fn RankForWeapon(w: f32) f32 {
+pub fn RankForWeapon(w: f32) callconv(.c) f32 {
     if (w == q.IT_LIGHTNING)
         return 1;
     if (w == q.IT_ROCKET_LAUNCHER)
@@ -444,7 +444,7 @@ pub export fn RankForWeapon(w: f32) f32 {
     return 7;
 }
 
-pub export fn WeaponCode(w: f32) f32 {
+pub fn WeaponCode(w: f32) callconv(.c) f32 {
     if (w == q.IT_SUPER_SHOTGUN)
         return 3;
     if (w == q.IT_NAILGUN)
@@ -465,7 +465,7 @@ pub export fn WeaponCode(w: f32) f32 {
 /// Deathmatch weapon change rules for picking up a weapon
 ///
 /// .float          ammo_shells, ammo_nails, ammo_rockets, ammo_cells;
-pub export fn Deathmatch_Weapon(old: f32, new: f32) void {
+pub fn Deathmatch_Weapon(old: f32, new: f32) callconv(.c) void {
     _ = old;
     const self = q.me();
 
@@ -477,7 +477,7 @@ pub export fn Deathmatch_Weapon(old: f32, new: f32) void {
 }
 
 /// weapon_touch
-pub export fn weapon_touch() void {
+pub fn weapon_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     var new: f32 = 0;
@@ -631,7 +631,7 @@ pub export fn weapon_lightning() void {
 //
 // ===============================================================================
 
-pub export fn ammo_touch() void {
+pub fn ammo_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -824,7 +824,7 @@ pub export fn item_weapon() void {
 //
 // ===============================================================================
 
-pub export fn key_touch() void {
+pub fn key_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -850,7 +850,7 @@ pub export fn key_touch() void {
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
-pub export fn key_setsounds() void {
+pub fn key_setsounds() callconv(.c) void {
     const self = q.me();
     const worldtype = q.world.get().get(q.worldtype);
     if (worldtype == 0) {
@@ -939,7 +939,7 @@ pub export fn item_key2() void {
 //
 // ===============================================================================
 
-pub export fn sigil_touch() void {
+pub fn sigil_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -999,7 +999,7 @@ pub export fn item_sigil() void {
 //
 // ===============================================================================
 
-pub export fn powerup_touch() void {
+pub fn powerup_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -1143,7 +1143,7 @@ pub export fn item_artifact_super_damage() void {
 //
 // ===============================================================================
 
-pub export fn BackpackTouch() void {
+pub fn BackpackTouch() callconv(.c) void {
     var self = q.me();
     const other = q.other.get();
     var b_switch: f32 = 0;
@@ -1288,7 +1288,7 @@ pub export fn BackpackTouch() void {
 }
 
 /// DropBackpack
-pub export fn DropBackpack() void {
+pub fn DropBackpack() callconv(.c) void {
     const self = q.me();
 
     if (self.get(.ammo_shells) + self.get(.ammo_nails) + self.get(.ammo_rockets) + self.get(.ammo_cells) == 0)

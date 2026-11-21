@@ -31,7 +31,7 @@ pub export fn info_notnull() void {}
 
 pub const START_OFF: f32 = 1;
 
-pub export fn light_use() void {
+pub fn light_use() callconv(.c) void {
     const self = q.me();
     if (q.has(self.get(.spawnflags), START_OFF)) {
         q.lightstyle(self.get(q.style), S("m"));
@@ -110,7 +110,7 @@ pub export fn light_globe() void {
     q.makestatic(self);
 }
 
-pub export fn FireAmbient() void {
+pub fn FireAmbient() callconv(.c) void {
     _ = q.precache_sound(S("ambience/fire1.wav"));
     // attenuate fast
     q.ambientsound(q.me().get(.origin), S("ambience/fire1.wav"), 0.5, q.ATTN_STATIC);
@@ -176,7 +176,7 @@ pub export fn misc_fireball() void {
         _ = self.get(q.speed) == 1000;
 }
 
-pub export fn fire_fly() void {
+pub fn fire_fly() callconv(.c) void {
     const self = q.me();
 
     const fireball = q.spawn();
@@ -199,7 +199,7 @@ pub export fn fire_fly() void {
     self.set(.think, q.func(fire_fly));
 }
 
-pub export fn fire_touch() void {
+pub fn fire_touch() callconv(.c) void {
     const self = q.me();
     combat.T_Damage(q.other.get(), self, self, 20);
     q.remove(self);
@@ -207,7 +207,7 @@ pub export fn fire_touch() void {
 
 //============================================================================
 
-pub export fn barrel_explode() void {
+pub fn barrel_explode() callconv(.c) void {
     const self = q.me();
     self.set(.takedamage, q.DAMAGE_NO);
     self.set(.classname, S("explo_box"));
@@ -269,7 +269,7 @@ pub export fn misc_explobox2() void {
 pub const SPAWNFLAG_SUPERSPIKE: f32 = 1;
 pub const SPAWNFLAG_LASER: f32 = 2;
 
-pub export fn Laser_Touch() void {
+pub fn Laser_Touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -301,7 +301,7 @@ pub export fn Laser_Touch() void {
     q.remove(self);
 }
 
-pub export fn LaunchLaser(org: Vector, vec_: Vector) void {
+pub fn LaunchLaser(org: Vector, vec_: Vector) callconv(.c) void {
     const self = q.me();
     // (The original redeclares `local vector vec;`, which qcc resolves to the
     // parameter.)
@@ -331,7 +331,7 @@ pub export fn LaunchLaser(org: Vector, vec_: Vector) void {
     newmis.set(.touch, q.func(Laser_Touch));
 }
 
-pub export fn spikeshooter_use() void {
+pub fn spikeshooter_use() callconv(.c) void {
     const self = q.me();
     if (q.has(self.get(.spawnflags), SPAWNFLAG_LASER)) {
         q.sound(self, q.CHAN_VOICE, S("enforcer/enfire.wav"), 1, q.ATTN_NORM);
@@ -345,7 +345,7 @@ pub export fn spikeshooter_use() void {
     }
 }
 
-pub export fn shooter_think() void {
+pub fn shooter_think() callconv(.c) void {
     const self = q.me();
     spikeshooter_use();
     self.set(.nextthink, q.time.get() + self.get(q.wait));
@@ -395,7 +395,7 @@ pub export fn air_bubbles() void {
     q.remove(q.me());
 }
 
-pub export fn make_bubbles() void {
+pub fn make_bubbles() callconv(.c) void {
     const self = q.me();
 
     const bubble = q.spawn();
@@ -415,7 +415,7 @@ pub export fn make_bubbles() void {
     self.set(.think, q.func(make_bubbles));
 }
 
-pub export fn bubble_split() void {
+pub fn bubble_split() callconv(.c) void {
     const self = q.me();
 
     const bubble = q.spawn();
@@ -437,7 +437,7 @@ pub export fn bubble_split() void {
         q.remove(self);
 }
 
-pub export fn bubble_remove() void {
+pub fn bubble_remove() callconv(.c) void {
     const self = q.me();
     if (q.other.get().get(.classname).eql(self.get(.classname))) {
         //              dprint ("bump");
@@ -446,7 +446,7 @@ pub export fn bubble_remove() void {
     q.remove(self);
 }
 
-pub export fn bubble_bob() void {
+pub fn bubble_bob() callconv(.c) void {
     const self = q.me();
 
     self.set(q.cnt, self.get(q.cnt) + 1);
@@ -501,7 +501,7 @@ pub export fn viewthing() void {
 //
 // ==============================================================================
 
-pub export fn func_wall_use() void {
+pub fn func_wall_use() callconv(.c) void {
     // change to alternate textures
     const self = q.me();
     self.set(.frame, 1 - self.get(.frame));
@@ -615,7 +615,7 @@ pub export fn ambient_swamp2() void {
 
 //============================================================================
 
-pub export fn noise_think() void {
+pub fn noise_think() callconv(.c) void {
     const self = q.me();
     self.set(.nextthink, q.time.get() + 0.5);
     q.sound(self, 1, S("enforcer/enfire.wav"), 1, q.ATTN_NORM);

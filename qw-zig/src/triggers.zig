@@ -20,7 +20,7 @@ pub const otemp = q.userGlobal(Entity, "otemp");
 pub const s = q.userGlobal(Entity, "s");
 pub const old = q.userGlobal(Entity, "old");
 
-pub export fn trigger_reactivate() void {
+pub fn trigger_reactivate() callconv(.c) void {
     q.me().set(.solid, q.SOLID_TRIGGER);
 }
 
@@ -30,7 +30,7 @@ pub const SPAWNFLAG_NOMESSAGE: f32 = 1;
 pub const SPAWNFLAG_NOTOUCH: f32 = 1;
 
 /// the wait time has passed, so set back up for another activation
-pub export fn multi_wait() void {
+pub fn multi_wait() callconv(.c) void {
     const self = q.me();
     if (self.get(.max_health) != 0) {
         self.set(.health, self.get(.max_health));
@@ -42,7 +42,7 @@ pub export fn multi_wait() void {
 /// the trigger was just touched/killed/used
 /// self.enemy should be set to the activator so it can be held through a delay
 /// so wait for the delay time before firing
-pub export fn multi_trigger() void {
+pub fn multi_trigger() callconv(.c) void {
     const self = q.me();
     if (self.get(.nextthink) > q.time.get()) {
         return; // allready been triggered
@@ -76,17 +76,17 @@ pub export fn multi_trigger() void {
     }
 }
 
-pub export fn multi_killed() void {
+pub fn multi_killed() callconv(.c) void {
     q.me().set(.enemy, q.damage_attacker.get());
     multi_trigger();
 }
 
-pub export fn multi_use() void {
+pub fn multi_use() callconv(.c) void {
     q.me().set(.enemy, q.activator.get());
     multi_trigger();
 }
 
-pub export fn multi_touch() void {
+pub fn multi_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     if (other.get(.classname).neq(S("player")))
@@ -213,7 +213,7 @@ pub export fn trigger_secret() void {
 
 //=============================================================================
 
-pub export fn counter_use() void {
+pub fn counter_use() callconv(.c) void {
     const self = q.me();
     const activator = q.activator.get();
 
@@ -268,7 +268,7 @@ pub export fn trigger_counter() void {
 pub const PLAYER_ONLY: f32 = 1;
 pub const SILENT: f32 = 2;
 
-pub export fn play_teleport() void {
+pub fn play_teleport() callconv(.c) void {
     const self = q.me();
 
     const v = q.random() * 5;
@@ -287,7 +287,7 @@ pub export fn play_teleport() void {
     q.remove(self);
 }
 
-pub export fn spawn_tfog(org: Vector) void {
+pub fn spawn_tfog(org: Vector) callconv(.c) void {
     s.set(q.spawn());
     const e = s.get();
     e.set(.origin, org);
@@ -302,7 +302,7 @@ pub export fn spawn_tfog(org: Vector) void {
     q.multicast(org, q.MULTICAST_PHS);
 }
 
-pub export fn tdeath_touch() void {
+pub fn tdeath_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -335,7 +335,7 @@ pub export fn tdeath_touch() void {
     }
 }
 
-pub export fn spawn_tdeath(org: Vector, death_owner: Entity) void {
+pub fn spawn_tdeath(org: Vector, death_owner: Entity) callconv(.c) void {
     const death = q.spawn();
     death.set(.classname, S("teledeath"));
     death.set(.movetype, q.MOVETYPE_NONE);
@@ -351,7 +351,7 @@ pub export fn spawn_tdeath(org: Vector, death_owner: Entity) void {
     q.force_retouch.set(2); // make sure even still objects get hit
 }
 
-pub export fn teleport_touch() void {
+pub fn teleport_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -422,7 +422,7 @@ pub export fn info_teleport_destination() void {
         q.objerror(S("no targetname"));
 }
 
-pub export fn teleport_use() void {
+pub fn teleport_use() callconv(.c) void {
     const self = q.me();
     self.set(.nextthink, q.time.get() + 0.2);
     q.force_retouch.set(2); // make sure even still objects get hit
@@ -472,7 +472,7 @@ pub export fn trigger_setskill() void {
 //
 // ==============================================================================
 
-pub export fn trigger_onlyregistered_touch() void {
+pub fn trigger_onlyregistered_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     if (other.get(.classname).neq(S("player")))
@@ -503,13 +503,13 @@ pub export fn trigger_onlyregistered() void {
 
 //============================================================================
 
-pub export fn hurt_on() void {
+pub fn hurt_on() callconv(.c) void {
     const self = q.me();
     self.set(.solid, q.SOLID_TRIGGER);
     self.set(.nextthink, -1);
 }
 
-pub export fn hurt_touch() void {
+pub fn hurt_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     if (other.get(.takedamage) != 0) {
@@ -538,7 +538,7 @@ pub export fn trigger_hurt() void {
 
 pub const PUSH_ONCE: f32 = 1;
 
-pub export fn trigger_push_touch() void {
+pub fn trigger_push_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     if (other.get(.classname).eql(S("grenade"))) {
@@ -569,7 +569,7 @@ pub export fn trigger_push() void {
 
 //============================================================================
 
-pub export fn trigger_monsterjump_touch() void {
+pub fn trigger_monsterjump_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     // `other.flags & (...) != FL_MONSTER`: `&` binds tighter than `!=` in

@@ -21,7 +21,7 @@ const subs = @import("subs.zig");
 ///
 /// Returns true if the inflictor can directly damage the target.  Used for
 /// explosions and melee attacks.
-pub export fn CanDamage(targ: Entity, inflictor: Entity) f32 {
+pub fn CanDamage(targ: Entity, inflictor: Entity) callconv(.c) f32 {
     const self = q.me();
     // bmodels need special checking because their origin is 0,0,0
     if (targ.get(.movetype) == q.MOVETYPE_PUSH) {
@@ -53,7 +53,7 @@ pub export fn CanDamage(targ: Entity, inflictor: Entity) f32 {
 }
 
 /// Killed
-pub export fn Killed(targ: Entity, attacker: Entity) void {
+pub fn Killed(targ: Entity, attacker: Entity) callconv(.c) void {
     const oself = q.self.get();
     q.self.set(targ);
     const self = targ;
@@ -92,7 +92,7 @@ pub export fn Killed(targ: Entity, attacker: Entity) void {
 ///
 /// The damage is coming from inflictor, but get mad at attacker
 /// This should be the only function that ever reduces health.
-pub export fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32) void {
+pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32) callconv(.c) void {
     var damage = damage_;
 
     if (targ.get(.takedamage) == 0)
@@ -201,7 +201,7 @@ pub export fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage
 }
 
 /// T_RadiusDamage
-pub export fn T_RadiusDamage(inflictor: Entity, attacker: Entity, damage: f32, ignore: Entity, dtype: String) void {
+pub fn T_RadiusDamage(inflictor: Entity, attacker: Entity, damage: f32, ignore: Entity, dtype: String) callconv(.c) void {
     var head = q.findradius(inflictor.get(.origin), damage + 40);
 
     while (!head.isNull()) {
@@ -233,7 +233,7 @@ pub export fn T_RadiusDamage(inflictor: Entity, attacker: Entity, damage: f32, i
 }
 
 /// T_BeamDamage
-pub export fn T_BeamDamage(attacker: Entity, damage: f32) void {
+pub fn T_BeamDamage(attacker: Entity, damage: f32) callconv(.c) void {
     var head = q.findradius(attacker.get(.origin), damage + 40);
 
     while (!head.isNull()) {

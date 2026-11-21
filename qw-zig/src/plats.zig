@@ -15,7 +15,7 @@ const subs = @import("subs.zig");
 
 pub const PLAT_LOW_TRIGGER: f32 = 1;
 
-pub export fn plat_spawn_inside_trigger() void {
+pub fn plat_spawn_inside_trigger() callconv(.c) void {
     const self = q.me();
 
     //
@@ -48,7 +48,7 @@ pub export fn plat_spawn_inside_trigger() void {
     q.setsize(trigger, tmin, tmax);
 }
 
-pub export fn plat_hit_top() void {
+pub fn plat_hit_top() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.get(.noise1), 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_TOP);
@@ -56,27 +56,27 @@ pub export fn plat_hit_top() void {
     self.set(.nextthink, self.get(.ltime) + 3);
 }
 
-pub export fn plat_hit_bottom() void {
+pub fn plat_hit_bottom() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.get(.noise1), 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_BOTTOM);
 }
 
-pub export fn plat_go_down() void {
+pub fn plat_go_down() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_DOWN);
     subs.SUB_CalcMove(self.get(q.pos2), self.get(q.speed), q.func(plat_hit_bottom));
 }
 
-pub export fn plat_go_up() void {
+pub fn plat_go_up() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_UP);
     subs.SUB_CalcMove(self.get(q.pos1), self.get(q.speed), q.func(plat_hit_top));
 }
 
-pub export fn plat_center_touch() void {
+pub fn plat_center_touch() callconv(.c) void {
     const other = q.other.get();
     if (other.get(.classname).neq(S("player")))
         return;
@@ -94,7 +94,7 @@ pub export fn plat_center_touch() void {
     }
 }
 
-pub export fn plat_outside_touch() void {
+pub fn plat_outside_touch() callconv(.c) void {
     const other = q.other.get();
     if (other.get(.classname).neq(S("player")))
         return;
@@ -109,13 +109,13 @@ pub export fn plat_outside_touch() void {
         plat_go_down();
 }
 
-pub export fn plat_trigger_use() void {
+pub fn plat_trigger_use() callconv(.c) void {
     if (!q.fnIsNull(q.me().get(.think)))
         return; // allready activated
     plat_go_down();
 }
 
-pub export fn plat_crush() void {
+pub fn plat_crush() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     //dprint ("plat_crush\n");
@@ -132,7 +132,7 @@ pub export fn plat_crush() void {
     }
 }
 
-pub export fn plat_use() void {
+pub fn plat_use() callconv(.c) void {
     const self = q.me();
     self.set(.use, q.func(subs.SUB_Null));
     if (self.get(q.state) != q.STATE_UP)
@@ -219,7 +219,7 @@ pub export fn func_plat() void {
 
 //============================================================================
 
-pub export fn train_blocked() void {
+pub fn train_blocked() callconv(.c) void {
     const self = q.me();
     if (q.time.get() < self.get(q.attack_finished))
         return;
@@ -229,13 +229,13 @@ pub export fn train_blocked() void {
     combat.T_Damage(other, self, self, self.get(q.dmg));
 }
 
-pub export fn train_use() void {
+pub fn train_use() callconv(.c) void {
     if (q.fnNeq(q.me().get(.think), q.func(func_train_find)))
         return; // already activated
     train_next();
 }
 
-pub export fn train_wait() void {
+pub fn train_wait() callconv(.c) void {
     const self = q.me();
     if (self.get(q.wait) != 0) {
         self.set(.nextthink, self.get(.ltime) + self.get(q.wait));
@@ -247,7 +247,7 @@ pub export fn train_wait() void {
     self.set(.think, q.func(train_next));
 }
 
-pub export fn train_next() void {
+pub fn train_next() callconv(.c) void {
     const self = q.me();
 
     const targ = q.find(q.world.get(), q.fieldRef(.targetname), self.get(.target));
@@ -263,7 +263,7 @@ pub export fn train_next() void {
     subs.SUB_CalcMove(targ.get(.origin) - self.get(.mins), self.get(q.speed), q.func(train_wait));
 }
 
-pub export fn func_train_find() void {
+pub fn func_train_find() callconv(.c) void {
     const self = q.me();
 
     const targ = q.find(q.world.get(), q.fieldRef(.targetname), self.get(.target));

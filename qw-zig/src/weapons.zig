@@ -17,7 +17,7 @@ const player = @import("player.zig");
 const subs = @import("subs.zig");
 
 /// called by worldspawn
-pub export fn W_Precache() void {
+pub fn W_Precache() callconv(.c) void {
     _ = q.precache_sound(S("weapons/r_exp3.wav")); // new rocket explosion
     _ = q.precache_sound(S("weapons/rocket1i.wav")); // spike gun
     _ = q.precache_sound(S("weapons/sgun1.wav"));
@@ -32,12 +32,12 @@ pub export fn W_Precache() void {
     _ = q.precache_sound(S("weapons/shotgn2.wav")); // super shotgun
 }
 
-pub export fn crandom() f32 {
+pub fn crandom() callconv(.c) f32 {
     return 2 * (q.random() - 0.5);
 }
 
 /// W_FireAxe
-pub export fn W_FireAxe() void {
+pub fn W_FireAxe() callconv(.c) void {
     const self = q.me();
 
     q.makevectors(self.get(.v_angle));
@@ -72,7 +72,7 @@ pub export fn W_FireAxe() void {
 
 //============================================================================
 
-pub export fn wall_velocity() Vector {
+pub fn wall_velocity() callconv(.c) Vector {
     const self = q.me();
     var vel = q.normalize(self.get(.velocity));
     vel = q.normalize(vel + q.scale(q.v_up.get(), q.random() - 0.5) + q.scale(q.v_right.get(), q.random() - 0.5));
@@ -83,7 +83,7 @@ pub export fn wall_velocity() Vector {
 }
 
 /// SpawnMeatSpray
-pub export fn SpawnMeatSpray(org: Vector, vel: Vector) void {
+pub fn SpawnMeatSpray(org: Vector, vel: Vector) callconv(.c) void {
     const self = q.me();
     // (The original also declares a `local vector org;`, shadowing the
     // parameter without ever setting it. The parameter is used here.)
@@ -111,7 +111,7 @@ pub export fn SpawnMeatSpray(org: Vector, vel: Vector) void {
 }
 
 /// SpawnBlood
-pub export fn SpawnBlood(org: Vector, damage: f32) void {
+pub fn SpawnBlood(org: Vector, damage: f32) callconv(.c) void {
     _ = damage;
     q.WriteByte(q.MSG_MULTICAST, q.SVC_TEMPENTITY);
     q.WriteByte(q.MSG_MULTICAST, q.TE_BLOOD);
@@ -123,7 +123,7 @@ pub export fn SpawnBlood(org: Vector, damage: f32) void {
 }
 
 /// spawn_touchblood
-pub export fn spawn_touchblood(damage: f32) void {
+pub fn spawn_touchblood(damage: f32) callconv(.c) void {
     const vel = q.scale(wall_velocity(), 0.2);
     SpawnBlood(q.me().get(.origin) + q.scale(vel, 0.01), damage);
 }
@@ -145,21 +145,21 @@ pub const blood_count = q.userGlobal(f32, "blood_count");
 pub const puff_org = q.userGlobal(Vector, "puff_org");
 pub const puff_count = q.userGlobal(f32, "puff_count");
 
-pub export fn ClearMultiDamage() void {
+pub fn ClearMultiDamage() callconv(.c) void {
     multi_ent.set(q.world.get());
     multi_damage.set(0);
     blood_count.set(0);
     puff_count.set(0);
 }
 
-pub export fn ApplyMultiDamage() void {
+pub fn ApplyMultiDamage() callconv(.c) void {
     if (multi_ent.get().isNull())
         return;
     const self = q.me();
     combat.T_Damage(multi_ent.get(), self, self, multi_damage.get());
 }
 
-pub export fn AddMultiDamage(hit: Entity, damage: f32) void {
+pub fn AddMultiDamage(hit: Entity, damage: f32) callconv(.c) void {
     if (hit.isNull())
         return;
 
@@ -172,7 +172,7 @@ pub export fn AddMultiDamage(hit: Entity, damage: f32) void {
     }
 }
 
-pub export fn Multi_Finish() void {
+pub fn Multi_Finish() callconv(.c) void {
     if (puff_count.get() != 0) {
         const o = puff_org.get();
         q.WriteByte(q.MSG_MULTICAST, q.SVC_TEMPENTITY);
@@ -203,7 +203,7 @@ pub export fn Multi_Finish() void {
 // ==============================================================================
 
 /// TraceAttack
-pub export fn TraceAttack(damage: f32, dir: Vector) void {
+pub fn TraceAttack(damage: f32, dir: Vector) callconv(.c) void {
     var vel = q.normalize(dir + q.scale(q.v_up.get(), crandom()) + q.scale(q.v_right.get(), crandom()));
     vel = vel + q.scale(q.trace_plane_normal.get(), 2);
     vel = q.scale(vel, 200);
@@ -225,7 +225,7 @@ pub export fn TraceAttack(damage: f32, dir: Vector) void {
 ///
 /// Used by shotgun, super shotgun, and enemy soldier firing
 /// Go to the trouble of combining multiple pellets into a single damage call.
-pub export fn FireBullets(shotcount_: f32, dir: Vector, spread: Vector) void {
+pub fn FireBullets(shotcount_: f32, dir: Vector, spread: Vector) callconv(.c) void {
     const self = q.me();
     var shotcount = shotcount_;
 
@@ -252,7 +252,7 @@ pub export fn FireBullets(shotcount_: f32, dir: Vector, spread: Vector) void {
 }
 
 /// W_FireShotgun
-pub export fn W_FireShotgun() void {
+pub fn W_FireShotgun() callconv(.c) void {
     const self = q.me();
 
     q.sound(self, q.CHAN_WEAPON, S("weapons/guncock.wav"), 1, q.ATTN_NORM);
@@ -270,7 +270,7 @@ pub export fn W_FireShotgun() void {
 }
 
 /// W_FireSuperShotgun
-pub export fn W_FireSuperShotgun() void {
+pub fn W_FireSuperShotgun() callconv(.c) void {
     const self = q.me();
 
     if (self.get(.currentammo) == 1) {
@@ -297,7 +297,7 @@ pub export fn W_FireSuperShotgun() void {
 //
 // ==============================================================================
 
-pub export fn T_MissileTouch() void {
+pub fn T_MissileTouch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -358,7 +358,7 @@ pub export fn T_MissileTouch() void {
 }
 
 /// W_FireRocket
-pub export fn W_FireRocket() void {
+pub fn W_FireRocket() callconv(.c) void {
     const self = q.me();
 
     if (q.deathmatch.get() != 4) {
@@ -403,7 +403,7 @@ pub export fn W_FireRocket() void {
 //
 // ===============================================================================
 
-pub export fn LightningHit(from: Entity, damage: f32) void {
+pub fn LightningHit(from: Entity, damage: f32) callconv(.c) void {
     const e = q.trace_endpos.get();
     q.WriteByte(q.MSG_MULTICAST, q.SVC_TEMPENTITY);
     q.WriteByte(q.MSG_MULTICAST, q.TE_LIGHTNINGBLOOD);
@@ -416,7 +416,7 @@ pub export fn LightningHit(from: Entity, damage: f32) void {
 }
 
 /// LightningDamage
-pub export fn LightningDamage(p1: Vector, p2: Vector, from: Entity, damage: f32) void {
+pub fn LightningDamage(p1: Vector, p2: Vector, from: Entity, damage: f32) callconv(.c) void {
     const self = q.me();
 
     var f = p2 - p1;
@@ -452,7 +452,7 @@ pub export fn LightningDamage(p1: Vector, p2: Vector, from: Entity, damage: f32)
     }
 }
 
-pub export fn W_FireLightning() void {
+pub fn W_FireLightning() callconv(.c) void {
     const self = q.me();
 
     if (self.get(.ammo_cells) < 1) {
@@ -516,7 +516,7 @@ pub export fn W_FireLightning() void {
 
 //=============================================================================
 
-pub export fn GrenadeExplode() void {
+pub fn GrenadeExplode() callconv(.c) void {
     const self = q.me();
     if (self.get(q.voided) != 0) {
         return;
@@ -536,7 +536,7 @@ pub export fn GrenadeExplode() void {
     q.remove(self);
 }
 
-pub export fn GrenadeTouch() void {
+pub fn GrenadeTouch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
     if (other.eql(self.get(.owner)))
@@ -551,7 +551,7 @@ pub export fn GrenadeTouch() void {
 }
 
 /// W_FireGrenade
-pub export fn W_FireGrenade() void {
+pub fn W_FireGrenade() callconv(.c) void {
     const self = q.me();
 
     if (q.deathmatch.get() != 4) {
@@ -613,7 +613,7 @@ pub export fn W_FireGrenade() void {
 /// launch_spike
 ///
 /// Used for both the player and the ogre
-pub export fn launch_spike(org: Vector, dir: Vector) void {
+pub fn launch_spike(org: Vector, dir: Vector) callconv(.c) void {
     const self = q.me();
     q.newmis.set(q.spawn());
     const newmis = q.newmis.get();
@@ -635,7 +635,7 @@ pub export fn launch_spike(org: Vector, dir: Vector) void {
     newmis.set(.velocity, q.scale(dir, 1000));
 }
 
-pub export fn W_FireSuperSpikes() void {
+pub fn W_FireSuperSpikes() callconv(.c) void {
     const self = q.me();
 
     q.sound(self, q.CHAN_WEAPON, S("weapons/spike2.wav"), 1, q.ATTN_NORM);
@@ -654,7 +654,7 @@ pub export fn W_FireSuperSpikes() void {
     q.WriteByte(q.MSG_ONE, q.SVC_SMALLKICK);
 }
 
-pub export fn W_FireSpikes(ox: f32) void {
+pub fn W_FireSpikes(ox: f32) callconv(.c) void {
     const self = q.me();
 
     q.makevectors(self.get(.v_angle));
@@ -685,7 +685,7 @@ pub export fn W_FireSpikes(ox: f32) void {
 
 pub const hit_z = q.userField(f32, "hit_z");
 
-pub export fn spike_touch() void {
+pub fn spike_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -729,7 +729,7 @@ pub export fn spike_touch() void {
     q.remove(self);
 }
 
-pub export fn superspike_touch() void {
+pub fn superspike_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
@@ -773,7 +773,7 @@ pub export fn superspike_touch() void {
 //
 // ===============================================================================
 
-pub export fn W_SetCurrentAmmo() void {
+pub fn W_SetCurrentAmmo() callconv(.c) void {
     const self = q.me();
     player.player_run(); // get out of any weapon firing states
 
@@ -826,7 +826,7 @@ pub export fn W_SetCurrentAmmo() void {
     }
 }
 
-pub export fn W_BestWeapon() f32 {
+pub fn W_BestWeapon() callconv(.c) f32 {
     const self = q.me();
 
     const it = self.get(.items);
@@ -851,7 +851,7 @@ pub export fn W_BestWeapon() f32 {
     return q.IT_AXE;
 }
 
-pub export fn W_CheckNoAmmo() f32 {
+pub fn W_CheckNoAmmo() callconv(.c) f32 {
     const self = q.me();
     if (self.get(.currentammo) > 0)
         return q.TRUE;
@@ -870,7 +870,7 @@ pub export fn W_CheckNoAmmo() f32 {
 /// W_Attack
 ///
 /// An attack impulse can be triggered now
-pub export fn W_Attack() void {
+pub fn W_Attack() callconv(.c) void {
     const self = q.me();
 
     if (W_CheckNoAmmo() == 0)
@@ -921,7 +921,7 @@ pub export fn W_Attack() void {
 }
 
 /// W_ChangeWeapon
-pub export fn W_ChangeWeapon() void {
+pub fn W_ChangeWeapon() callconv(.c) void {
     const self = q.me();
     var am: f32 = 0;
     var fl: f32 = 0;
@@ -983,7 +983,7 @@ pub export fn W_ChangeWeapon() void {
 const cheats_enabled = false;
 
 /// CheatCommand
-pub export fn CheatCommand() void {
+pub fn CheatCommand() callconv(.c) void {
     if (cheats_enabled) {
         const self = q.me();
         self.set(.ammo_rockets, 100);
@@ -1004,7 +1004,7 @@ pub export fn CheatCommand() void {
 /// CycleWeaponCommand
 ///
 /// Go to the next weapon with ammo
-pub export fn CycleWeaponCommand() void {
+pub fn CycleWeaponCommand() callconv(.c) void {
     const self = q.me();
 
     self.set(.impulse, 0);
@@ -1055,7 +1055,7 @@ pub export fn CycleWeaponCommand() void {
 /// CycleWeaponReverseCommand
 ///
 /// Go to the prev weapon with ammo
-pub export fn CycleWeaponReverseCommand() void {
+pub fn CycleWeaponReverseCommand() callconv(.c) void {
     const self = q.me();
 
     const it = self.get(.items);
@@ -1107,12 +1107,12 @@ pub export fn CycleWeaponReverseCommand() void {
 /// ServerflagsCommand
 ///
 /// Just for development
-pub export fn ServerflagsCommand() void {
+pub fn ServerflagsCommand() callconv(.c) void {
     q.serverflags.set(q.serverflags.get() * 2 + 1);
 }
 
 /// ImpulseCommands
-pub export fn ImpulseCommands() void {
+pub fn ImpulseCommands() callconv(.c) void {
     const self = q.me();
     if (self.get(.impulse) >= 1 and self.get(.impulse) <= 8)
         W_ChangeWeapon();
@@ -1132,7 +1132,7 @@ pub export fn ImpulseCommands() void {
 /// W_WeaponFrame
 ///
 /// Called every frame so impulse events can be handled as well as possible
-pub export fn W_WeaponFrame() void {
+pub fn W_WeaponFrame() callconv(.c) void {
     const self = q.me();
     if (q.time.get() < self.get(q.attack_finished))
         return;
@@ -1149,7 +1149,7 @@ pub export fn W_WeaponFrame() void {
 /// SuperDamageSound
 ///
 /// Plays sound if needed
-pub export fn SuperDamageSound() void {
+pub fn SuperDamageSound() callconv(.c) void {
     const self = q.me();
     if (self.get(q.super_damage_finished) > q.time.get()) {
         if (self.get(q.super_sound) < q.time.get()) {

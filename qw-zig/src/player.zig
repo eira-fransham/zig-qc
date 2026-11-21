@@ -118,7 +118,7 @@ test "frame numbers" {
 // PLAYER
 // ==============================================================================
 
-pub export fn player_stand1() void {
+pub fn player_stand1() callconv(.c) void {
     state(.axstnd1, player_stand1);
     const self = q.me();
     self.set(.weaponframe, 0);
@@ -140,7 +140,7 @@ pub export fn player_stand1() void {
     self.set(q.walkframe, self.get(q.walkframe) + 1);
 }
 
-pub export fn player_run() void {
+pub fn player_run() callconv(.c) void {
     state(.rockrun1, player_run);
     const self = q.me();
     self.set(.weaponframe, 0);
@@ -163,7 +163,7 @@ pub export fn player_run() void {
     self.set(q.walkframe, self.get(q.walkframe) + 1);
 }
 
-pub export fn muzzleflash() void {
+pub fn muzzleflash() callconv(.c) void {
     const self = q.me();
     q.WriteByte(q.MSG_MULTICAST, q.SVC_MUZZLEFLASH);
     q.WriteEntity(q.MSG_MULTICAST, self);
@@ -174,107 +174,107 @@ inline fn weaponframe(f: f32) void {
     q.me().set(.weaponframe, f);
 }
 
-pub export fn player_shot1() void {
+pub fn player_shot1() callconv(.c) void {
     state(.shotatt1, player_shot2);
     weaponframe(1);
     muzzleflash();
 }
-pub export fn player_shot2() void {
+pub fn player_shot2() callconv(.c) void {
     state(.shotatt2, player_shot3);
     weaponframe(2);
 }
-pub export fn player_shot3() void {
+pub fn player_shot3() callconv(.c) void {
     state(.shotatt3, player_shot4);
     weaponframe(3);
 }
-pub export fn player_shot4() void {
+pub fn player_shot4() callconv(.c) void {
     state(.shotatt4, player_shot5);
     weaponframe(4);
 }
-pub export fn player_shot5() void {
+pub fn player_shot5() callconv(.c) void {
     state(.shotatt5, player_shot6);
     weaponframe(5);
 }
-pub export fn player_shot6() void {
+pub fn player_shot6() callconv(.c) void {
     state(.shotatt6, player_run);
     weaponframe(6);
 }
 
-pub export fn player_axe1() void {
+pub fn player_axe1() callconv(.c) void {
     state(.axatt1, player_axe2);
     weaponframe(1);
 }
-pub export fn player_axe2() void {
+pub fn player_axe2() callconv(.c) void {
     state(.axatt2, player_axe3);
     weaponframe(2);
 }
-pub export fn player_axe3() void {
+pub fn player_axe3() callconv(.c) void {
     state(.axatt3, player_axe4);
     weaponframe(3);
     weapons.W_FireAxe();
 }
-pub export fn player_axe4() void {
+pub fn player_axe4() callconv(.c) void {
     state(.axatt4, player_run);
     weaponframe(4);
 }
 
-pub export fn player_axeb1() void {
+pub fn player_axeb1() callconv(.c) void {
     state(.axattb1, player_axeb2);
     weaponframe(5);
 }
-pub export fn player_axeb2() void {
+pub fn player_axeb2() callconv(.c) void {
     state(.axattb2, player_axeb3);
     weaponframe(6);
 }
-pub export fn player_axeb3() void {
+pub fn player_axeb3() callconv(.c) void {
     state(.axattb3, player_axeb4);
     weaponframe(7);
     weapons.W_FireAxe();
 }
-pub export fn player_axeb4() void {
+pub fn player_axeb4() callconv(.c) void {
     state(.axattb4, player_run);
     weaponframe(8);
 }
 
-pub export fn player_axec1() void {
+pub fn player_axec1() callconv(.c) void {
     state(.axattc1, player_axec2);
     weaponframe(1);
 }
-pub export fn player_axec2() void {
+pub fn player_axec2() callconv(.c) void {
     state(.axattc2, player_axec3);
     weaponframe(2);
 }
-pub export fn player_axec3() void {
+pub fn player_axec3() callconv(.c) void {
     state(.axattc3, player_axec4);
     weaponframe(3);
     weapons.W_FireAxe();
 }
-pub export fn player_axec4() void {
+pub fn player_axec4() callconv(.c) void {
     state(.axattc4, player_run);
     weaponframe(4);
 }
 
-pub export fn player_axed1() void {
+pub fn player_axed1() callconv(.c) void {
     state(.axattd1, player_axed2);
     weaponframe(5);
 }
-pub export fn player_axed2() void {
+pub fn player_axed2() callconv(.c) void {
     state(.axattd2, player_axed3);
     weaponframe(6);
 }
-pub export fn player_axed3() void {
+pub fn player_axed3() callconv(.c) void {
     state(.axattd3, player_axed4);
     weaponframe(7);
     weapons.W_FireAxe();
 }
-pub export fn player_axed4() void {
+pub fn player_axed4() callconv(.c) void {
     state(.axattd4, player_run);
     weaponframe(8);
 }
 
 //============================================================================
 
-pub export fn player_nail1() void {
+pub fn player_nail1() callconv(.c) void {
     state(.nailatt1, player_nail2);
     const self = q.me();
     muzzleflash();
@@ -290,7 +290,7 @@ pub export fn player_nail1() void {
     weapons.W_FireSpikes(4);
     self.set(q.attack_finished, q.time.get() + 0.2);
 }
-pub export fn player_nail2() void {
+pub fn player_nail2() callconv(.c) void {
     state(.nailatt2, player_nail1);
     const self = q.me();
     muzzleflash();
@@ -309,7 +309,7 @@ pub export fn player_nail2() void {
 
 //============================================================================
 
-pub export fn player_light1() void {
+pub fn player_light1() callconv(.c) void {
     state(.light1, player_light2);
     const self = q.me();
     muzzleflash();
@@ -325,7 +325,7 @@ pub export fn player_light1() void {
     weapons.W_FireLightning();
     self.set(q.attack_finished, q.time.get() + 0.2);
 }
-pub export fn player_light2() void {
+pub fn player_light2() callconv(.c) void {
     state(.light2, player_light1);
     const self = q.me();
     muzzleflash();
@@ -344,33 +344,33 @@ pub export fn player_light2() void {
 
 //============================================================================
 
-pub export fn player_rocket1() void {
+pub fn player_rocket1() callconv(.c) void {
     state(.rockatt1, player_rocket2);
     weaponframe(1);
     muzzleflash();
 }
-pub export fn player_rocket2() void {
+pub fn player_rocket2() callconv(.c) void {
     state(.rockatt2, player_rocket3);
     weaponframe(2);
 }
-pub export fn player_rocket3() void {
+pub fn player_rocket3() callconv(.c) void {
     state(.rockatt3, player_rocket4);
     weaponframe(3);
 }
-pub export fn player_rocket4() void {
+pub fn player_rocket4() callconv(.c) void {
     state(.rockatt4, player_rocket5);
     weaponframe(4);
 }
-pub export fn player_rocket5() void {
+pub fn player_rocket5() callconv(.c) void {
     state(.rockatt5, player_rocket6);
     weaponframe(5);
 }
-pub export fn player_rocket6() void {
+pub fn player_rocket6() callconv(.c) void {
     state(.rockatt6, player_run);
     weaponframe(6);
 }
 
-pub export fn PainSound() void {
+pub fn PainSound() callconv(.c) void {
     const self = q.me();
 
     if (self.get(.health) < 0)
@@ -448,49 +448,49 @@ pub export fn PainSound() void {
     return;
 }
 
-pub export fn player_pain1() void {
+pub fn player_pain1() callconv(.c) void {
     state(.pain1, player_pain2);
     PainSound();
     weaponframe(0);
 }
-pub export fn player_pain2() void {
+pub fn player_pain2() callconv(.c) void {
     state(.pain2, player_pain3);
 }
-pub export fn player_pain3() void {
+pub fn player_pain3() callconv(.c) void {
     state(.pain3, player_pain4);
 }
-pub export fn player_pain4() void {
+pub fn player_pain4() callconv(.c) void {
     state(.pain4, player_pain5);
 }
-pub export fn player_pain5() void {
+pub fn player_pain5() callconv(.c) void {
     state(.pain5, player_pain6);
 }
-pub export fn player_pain6() void {
+pub fn player_pain6() callconv(.c) void {
     state(.pain6, player_run);
 }
 
-pub export fn player_axpain1() void {
+pub fn player_axpain1() callconv(.c) void {
     state(.axpain1, player_axpain2);
     PainSound();
     weaponframe(0);
 }
-pub export fn player_axpain2() void {
+pub fn player_axpain2() callconv(.c) void {
     state(.axpain2, player_axpain3);
 }
-pub export fn player_axpain3() void {
+pub fn player_axpain3() callconv(.c) void {
     state(.axpain3, player_axpain4);
 }
-pub export fn player_axpain4() void {
+pub fn player_axpain4() callconv(.c) void {
     state(.axpain4, player_axpain5);
 }
-pub export fn player_axpain5() void {
+pub fn player_axpain5() callconv(.c) void {
     state(.axpain5, player_axpain6);
 }
-pub export fn player_axpain6() void {
+pub fn player_axpain6() callconv(.c) void {
     state(.axpain6, player_run);
 }
 
-pub export fn player_pain() void {
+pub fn player_pain() callconv(.c) void {
     const self = q.me();
     if (self.get(.weaponframe) != 0)
         return;
@@ -505,7 +505,7 @@ pub export fn player_pain() void {
     }
 }
 
-pub export fn DeathBubblesSpawn() void {
+pub fn DeathBubblesSpawn() callconv(.c) void {
     const self = q.me();
     const owner = self.get(.owner);
     if (owner.get(.waterlevel) != 3)
@@ -529,7 +529,7 @@ pub export fn DeathBubblesSpawn() void {
         q.remove(self);
 }
 
-pub export fn DeathBubbles(num_bubbles: f32) void {
+pub fn DeathBubbles(num_bubbles: f32) callconv(.c) void {
     const self = q.me();
 
     const bubble_spawner = q.spawn();
@@ -544,7 +544,7 @@ pub export fn DeathBubbles(num_bubbles: f32) void {
     return;
 }
 
-pub export fn DeathSound() void {
+pub fn DeathSound() callconv(.c) void {
     const self = q.me();
 
     // water death sounds
@@ -570,14 +570,14 @@ pub export fn DeathSound() void {
     return;
 }
 
-pub export fn PlayerDead() void {
+pub fn PlayerDead() callconv(.c) void {
     const self = q.me();
     self.set(.nextthink, -1);
     // allow respawn after a certain time
     self.set(.deadflag, q.DEAD_DEAD);
 }
 
-pub export fn VelocityForDamage(dm: f32) Vector {
+pub fn VelocityForDamage(dm: f32) callconv(.c) Vector {
     const self = q.me();
     const inflictor = q.damage_inflictor.get();
     var v = q.vec(0, 0, 0);
@@ -612,7 +612,7 @@ pub export fn VelocityForDamage(dm: f32) Vector {
     return v;
 }
 
-pub export fn ThrowGib(gibname: String, dm: f32) void {
+pub fn ThrowGib(gibname: String, dm: f32) callconv(.c) void {
     const self = q.me();
 
     const new = q.spawn();
@@ -630,7 +630,7 @@ pub export fn ThrowGib(gibname: String, dm: f32) void {
     new.set(.flags, 0);
 }
 
-pub export fn ThrowHead(gibname: String, dm: f32) void {
+pub fn ThrowHead(gibname: String, dm: f32) callconv(.c) void {
     const self = q.me();
     q.setmodel(self, gibname);
     self.set(.frame, 0);
@@ -648,7 +648,7 @@ pub export fn ThrowHead(gibname: String, dm: f32) void {
     self.set(.avelocity, q.scale(q.vec(0, 600, 0), weapons.crandom()));
 }
 
-pub export fn GibPlayer() void {
+pub fn GibPlayer() callconv(.c) void {
     const self = q.me();
     ThrowHead(S("progs/h_player.mdl"), self.get(.health));
     ThrowGib(S("progs/gib1.mdl"), self.get(.health));
@@ -674,7 +674,7 @@ pub export fn GibPlayer() void {
     }
 }
 
-pub export fn PlayerDie() void {
+pub fn PlayerDie() callconv(.c) void {
     const self = q.me();
     self.set(.items, self.get(.items) - q.band(self.get(.items), q.IT_INVISIBILITY));
 
@@ -758,7 +758,7 @@ pub export fn PlayerDie() void {
     }
 }
 
-pub export fn set_suicide_frame() void {
+pub fn set_suicide_frame() callconv(.c) void {
     // used by klill command and diconnect command
     const self = q.me();
     if (self.get(.model).neq(S("progs/player.mdl")))
@@ -770,200 +770,200 @@ pub export fn set_suicide_frame() void {
     self.set(.nextthink, -1);
 }
 
-pub export fn player_diea1() void {
+pub fn player_diea1() callconv(.c) void {
     state(.deatha1, player_diea2);
 }
-pub export fn player_diea2() void {
+pub fn player_diea2() callconv(.c) void {
     state(.deatha2, player_diea3);
 }
-pub export fn player_diea3() void {
+pub fn player_diea3() callconv(.c) void {
     state(.deatha3, player_diea4);
 }
-pub export fn player_diea4() void {
+pub fn player_diea4() callconv(.c) void {
     state(.deatha4, player_diea5);
 }
-pub export fn player_diea5() void {
+pub fn player_diea5() callconv(.c) void {
     state(.deatha5, player_diea6);
 }
-pub export fn player_diea6() void {
+pub fn player_diea6() callconv(.c) void {
     state(.deatha6, player_diea7);
 }
-pub export fn player_diea7() void {
+pub fn player_diea7() callconv(.c) void {
     state(.deatha7, player_diea8);
 }
-pub export fn player_diea8() void {
+pub fn player_diea8() callconv(.c) void {
     state(.deatha8, player_diea9);
 }
-pub export fn player_diea9() void {
+pub fn player_diea9() callconv(.c) void {
     state(.deatha9, player_diea10);
 }
-pub export fn player_diea10() void {
+pub fn player_diea10() callconv(.c) void {
     state(.deatha10, player_diea11);
 }
-pub export fn player_diea11() void {
+pub fn player_diea11() callconv(.c) void {
     state(.deatha11, player_diea11);
     PlayerDead();
 }
 
-pub export fn player_dieb1() void {
+pub fn player_dieb1() callconv(.c) void {
     state(.deathb1, player_dieb2);
 }
-pub export fn player_dieb2() void {
+pub fn player_dieb2() callconv(.c) void {
     state(.deathb2, player_dieb3);
 }
-pub export fn player_dieb3() void {
+pub fn player_dieb3() callconv(.c) void {
     state(.deathb3, player_dieb4);
 }
-pub export fn player_dieb4() void {
+pub fn player_dieb4() callconv(.c) void {
     state(.deathb4, player_dieb5);
 }
-pub export fn player_dieb5() void {
+pub fn player_dieb5() callconv(.c) void {
     state(.deathb5, player_dieb6);
 }
-pub export fn player_dieb6() void {
+pub fn player_dieb6() callconv(.c) void {
     state(.deathb6, player_dieb7);
 }
-pub export fn player_dieb7() void {
+pub fn player_dieb7() callconv(.c) void {
     state(.deathb7, player_dieb8);
 }
-pub export fn player_dieb8() void {
+pub fn player_dieb8() callconv(.c) void {
     state(.deathb8, player_dieb9);
 }
-pub export fn player_dieb9() void {
+pub fn player_dieb9() callconv(.c) void {
     state(.deathb9, player_dieb9);
     PlayerDead();
 }
 
-pub export fn player_diec1() void {
+pub fn player_diec1() callconv(.c) void {
     state(.deathc1, player_diec2);
 }
-pub export fn player_diec2() void {
+pub fn player_diec2() callconv(.c) void {
     state(.deathc2, player_diec3);
 }
-pub export fn player_diec3() void {
+pub fn player_diec3() callconv(.c) void {
     state(.deathc3, player_diec4);
 }
-pub export fn player_diec4() void {
+pub fn player_diec4() callconv(.c) void {
     state(.deathc4, player_diec5);
 }
-pub export fn player_diec5() void {
+pub fn player_diec5() callconv(.c) void {
     state(.deathc5, player_diec6);
 }
-pub export fn player_diec6() void {
+pub fn player_diec6() callconv(.c) void {
     state(.deathc6, player_diec7);
 }
-pub export fn player_diec7() void {
+pub fn player_diec7() callconv(.c) void {
     state(.deathc7, player_diec8);
 }
-pub export fn player_diec8() void {
+pub fn player_diec8() callconv(.c) void {
     state(.deathc8, player_diec9);
 }
-pub export fn player_diec9() void {
+pub fn player_diec9() callconv(.c) void {
     state(.deathc9, player_diec10);
 }
-pub export fn player_diec10() void {
+pub fn player_diec10() callconv(.c) void {
     state(.deathc10, player_diec11);
 }
-pub export fn player_diec11() void {
+pub fn player_diec11() callconv(.c) void {
     state(.deathc11, player_diec12);
 }
-pub export fn player_diec12() void {
+pub fn player_diec12() callconv(.c) void {
     state(.deathc12, player_diec13);
 }
-pub export fn player_diec13() void {
+pub fn player_diec13() callconv(.c) void {
     state(.deathc13, player_diec14);
 }
-pub export fn player_diec14() void {
+pub fn player_diec14() callconv(.c) void {
     state(.deathc14, player_diec15);
 }
-pub export fn player_diec15() void {
+pub fn player_diec15() callconv(.c) void {
     state(.deathc15, player_diec15);
     PlayerDead();
 }
 
-pub export fn player_died1() void {
+pub fn player_died1() callconv(.c) void {
     state(.deathd1, player_died2);
 }
-pub export fn player_died2() void {
+pub fn player_died2() callconv(.c) void {
     state(.deathd2, player_died3);
 }
-pub export fn player_died3() void {
+pub fn player_died3() callconv(.c) void {
     state(.deathd3, player_died4);
 }
-pub export fn player_died4() void {
+pub fn player_died4() callconv(.c) void {
     state(.deathd4, player_died5);
 }
-pub export fn player_died5() void {
+pub fn player_died5() callconv(.c) void {
     state(.deathd5, player_died6);
 }
-pub export fn player_died6() void {
+pub fn player_died6() callconv(.c) void {
     state(.deathd6, player_died7);
 }
-pub export fn player_died7() void {
+pub fn player_died7() callconv(.c) void {
     state(.deathd7, player_died8);
 }
-pub export fn player_died8() void {
+pub fn player_died8() callconv(.c) void {
     state(.deathd8, player_died9);
 }
-pub export fn player_died9() void {
+pub fn player_died9() callconv(.c) void {
     state(.deathd9, player_died9);
     PlayerDead();
 }
 
-pub export fn player_diee1() void {
+pub fn player_diee1() callconv(.c) void {
     state(.deathe1, player_diee2);
 }
-pub export fn player_diee2() void {
+pub fn player_diee2() callconv(.c) void {
     state(.deathe2, player_diee3);
 }
-pub export fn player_diee3() void {
+pub fn player_diee3() callconv(.c) void {
     state(.deathe3, player_diee4);
 }
-pub export fn player_diee4() void {
+pub fn player_diee4() callconv(.c) void {
     state(.deathe4, player_diee5);
 }
-pub export fn player_diee5() void {
+pub fn player_diee5() callconv(.c) void {
     state(.deathe5, player_diee6);
 }
-pub export fn player_diee6() void {
+pub fn player_diee6() callconv(.c) void {
     state(.deathe6, player_diee7);
 }
-pub export fn player_diee7() void {
+pub fn player_diee7() callconv(.c) void {
     state(.deathe7, player_diee8);
 }
-pub export fn player_diee8() void {
+pub fn player_diee8() callconv(.c) void {
     state(.deathe8, player_diee9);
 }
-pub export fn player_diee9() void {
+pub fn player_diee9() callconv(.c) void {
     state(.deathe9, player_diee9);
     PlayerDead();
 }
 
-pub export fn player_die_ax1() void {
+pub fn player_die_ax1() callconv(.c) void {
     state(.axdeth1, player_die_ax2);
 }
-pub export fn player_die_ax2() void {
+pub fn player_die_ax2() callconv(.c) void {
     state(.axdeth2, player_die_ax3);
 }
-pub export fn player_die_ax3() void {
+pub fn player_die_ax3() callconv(.c) void {
     state(.axdeth3, player_die_ax4);
 }
-pub export fn player_die_ax4() void {
+pub fn player_die_ax4() callconv(.c) void {
     state(.axdeth4, player_die_ax5);
 }
-pub export fn player_die_ax5() void {
+pub fn player_die_ax5() callconv(.c) void {
     state(.axdeth5, player_die_ax6);
 }
-pub export fn player_die_ax6() void {
+pub fn player_die_ax6() callconv(.c) void {
     state(.axdeth6, player_die_ax7);
 }
-pub export fn player_die_ax7() void {
+pub fn player_die_ax7() callconv(.c) void {
     state(.axdeth7, player_die_ax8);
 }
-pub export fn player_die_ax8() void {
+pub fn player_die_ax8() callconv(.c) void {
     state(.axdeth8, player_die_ax9);
 }
-pub export fn player_die_ax9() void {
+pub fn player_die_ax9() callconv(.c) void {
     state(.axdeth9, player_die_ax9);
     PlayerDead();
 }
