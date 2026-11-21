@@ -173,6 +173,33 @@ pub const SYS_FIELDS: &[(&str, &str)] = &[
     ("string", "noise3"),
 ];
 
+/// Look up a system field by its QuakeC field offset. A float access to an
+/// offset inside a vector field refers to that component (e.g. `origin_y`).
+pub fn field_at(offset: u32, ty: QcType) -> Option<String> {
+    let mut start = 0;
+    for &(fty, name) in SYS_FIELDS {
+        let fty = match fty {
+            "float" => QcType::Float,
+            "vector" => QcType::Vector,
+            "string" => QcType::String,
+            "entity" => QcType::Entity,
+            "void()" => QcType::Func,
+            other => unreachable!("unknown field type {other}"),
+        };
+        let len = if fty == QcType::Vector { 3 } else { 1 };
+        if (start..start + len).contains(&offset) {
+            let i = (offset - start) as usize;
+            return match (fty, ty) {
+                _ if fty == ty && i == 0 => Some(name.to_string()),
+                (QcType::Vector, QcType::Float) => Some(format!("{name}_{}", ["x", "y", "z"][i])),
+                _ => None,
+            };
+        }
+        start += len;
+    }
+    None
+}
+
 /// A single 32-bit global slot that wasm code can address.
 #[derive(Clone, Debug)]
 pub struct GlobalSlot {

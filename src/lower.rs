@@ -449,13 +449,18 @@ impl Lower<'_, '_> {
                 Ok(false)
             }
             Instr::Return(_) => {
-                if self.ret == Ty::Known(QcType::Void) {
-                    self.emit(Stmt::Return(None));
-                } else {
-                    let (v, t) = self.pop()?;
-                    self.unify(self.ret, t, "return value");
-                    self.emit(Stmt::Return(Some(v)));
-                }
+                self.lower_return()?;
+                Ok(false)
+            }
+            // Tail calls: an ordinary call followed by a return.
+            Instr::ReturnCall(ir::ReturnCall { func }) => {
+                self.lower_call(*func)?;
+                self.lower_return()?;
+                Ok(false)
+            }
+            Instr::ReturnCallIndirect(ir::ReturnCallIndirect { ty, table }) => {
+                self.lower_call_indirect(*ty, *table)?;
+                self.lower_return()?;
                 Ok(false)
             }
             Instr::Unreachable(_) => {
@@ -463,6 +468,7 @@ impl Lower<'_, '_> {
                 let v = match self.ret {
                     Ty::Known(QcType::Void) => None,
                     Ty::Known(QcType::Float) => Some(Expr::Float(0.0)),
+                    Ty::Known(QcType::Vector) => Some(Expr::Vector([0.0; 3])),
                     _ => Some(Expr::Null),
                 };
                 self.emit(Stmt::Return(v));
@@ -524,6 +530,13 @@ impl Lower<'_, '_> {
                         ensure!(f.is_finite(), "non-finite float constant {f}");
                         f
                     }
+                    Value::V128(bits) => {
+                        let lane = |i: u32| f32::from_bits((bits >> (32 * i)) as u32);
+                        let v = [lane(0), lane(1), lane(2)];
+                        ensure!(v.iter().all(|f| f.is_finite()), "non-finite vector constant {v:?}");
+                        self.stack.push((Expr::Vector(v), Ty::Known(QcType::Vector)));
+                        return Ok(true);
+                    }
                     other => bail!("unsupported constant {other:?}"),
                 };
                 self.stack.push((Expr::Float(f), Ty::Known(QcType::Float)));
@@ -532,14 +545,24 @@ impl Lower<'_, '_> {
             Instr::Binop(ir::Binop { op }) => {
                 let (b, _) = self.pop()?;
                 let (a, _) = self.pop()?;
-                let e = lower_binop(*op, a, b)?;
-                self.stack.push((e, Ty::Known(QcType::Float)));
+                let (e, t) = match *op {
+                    BinaryOp::F32x4ReplaceLane { idx } => (self.replace_lane(a, idx, b), QcType::Vector),
+                    BinaryOp::F32x4Add => (Expr::Bin(BinOp::Add, Box::new(a), Box::new(b)), QcType::Vector),
+                    BinaryOp::F32x4Sub => (Expr::Bin(BinOp::Sub, Box::new(a), Box::new(b)), QcType::Vector),
+                    op => (lower_binop(op, a, b)?, QcType::Float),
+                };
+                self.stack.push((e, Ty::Known(t)));
                 Ok(true)
             }
             Instr::Unop(ir::Unop { op }) => {
                 let (a, _) = self.pop()?;
-                let e = lower_unop(*op, a)?;
-                self.stack.push((e, Ty::Known(QcType::Float)));
+                let (e, t) = match *op {
+                    UnaryOp::F32x4ExtractLane { idx } => (self.extract_lane(a, idx), QcType::Float),
+                    UnaryOp::F32x4Splat => (self.splat(a), QcType::Vector),
+                    UnaryOp::F32x4Neg => (Expr::Un(UnOp::Neg, Box::new(a)), QcType::Vector),
+                    op => (lower_unop(op, a)?, QcType::Float),
+                };
+                self.stack.push((e, Ty::Known(t)));
                 Ok(true)
             }
             Instr::Call(ir::Call { func }) => {
@@ -547,17 +570,7 @@ impl Lower<'_, '_> {
                 Ok(true)
             }
             Instr::CallIndirect(ir::CallIndirect { ty, table }) => {
-                ensure!(Some(*table) == self.ctx.call_table, "call_indirect on unsupported table");
-                let (idx, _) = self.pop()?;
-                let idx = Self::const_i32(&idx, "call_indirect table index")?;
-                let (f, _) = self
-                    .table_slots
-                    .get(&idx)
-                    .cloned()
-                    .ok_or_else(|| anyhow!("call_indirect through call table slot {idx}, which was not set"))?;
-                let sig = self.ctx.sig_of_type(*ty)?;
-                let callee = Expr::FnCast(sig.clone(), Box::new(f));
-                self.call(callee, &sig, "indirect call")?;
+                self.lower_call_indirect(*ty, *table)?;
                 Ok(true)
             }
             Instr::TableSet(ir::TableSet { table }) => {
@@ -621,6 +634,90 @@ impl Lower<'_, '_> {
         }
     }
 
+    fn lower_return(&mut self) -> Result<()> {
+        if self.ret == Ty::Known(QcType::Void) {
+            self.emit(Stmt::Return(None));
+        } else {
+            let (v, t) = self.pop()?;
+            self.unify(self.ret, t, "return value");
+            self.emit(Stmt::Return(Some(v)));
+        }
+        Ok(())
+    }
+
+    fn lower_call_indirect(&mut self, ty: walrus::TypeId, table: walrus::TableId) -> Result<()> {
+        ensure!(Some(table) == self.ctx.call_table, "call_indirect on unsupported table");
+        let (idx, _) = self.pop()?;
+        let idx = Self::const_i32(&idx, "call_indirect table index")?;
+        let (f, _) = self
+            .table_slots
+            .get(&idx)
+            .cloned()
+            .ok_or_else(|| anyhow!("call_indirect through call table slot {idx}, which was not set"))?;
+        let sig = self.ctx.sig_of_type(ty)?;
+        let callee = Expr::FnCast(sig.clone(), Box::new(f));
+        self.call(callee, &sig, "indirect call")
+    }
+
+    /// Make `e` a plain local or global (spilling it if necessary), so that it
+    /// can be used as the base of a component or field access.
+    fn simple(&mut self, e: Expr, ty: Ty) -> Expr {
+        match e {
+            Expr::Local(_) | Expr::Global(_) => e,
+            e => {
+                let tmp = self.new_temp(ty);
+                self.emit(Stmt::Assign(Expr::Local(tmp.clone()), e));
+                Expr::Local(tmp)
+            }
+        }
+    }
+
+    fn extract_lane(&mut self, v: Expr, idx: u8) -> Expr {
+        match (v, idx) {
+            // The fourth lane doesn't exist in QuakeC.
+            (_, 3..) => Expr::Float(0.0),
+            (Expr::Vector(c), i) => Expr::Float(c[i as usize]),
+            (Expr::Field(e, name), i) => Expr::Field(e, format!("{name}_{}", ["x", "y", "z"][i as usize])),
+            (v, i) => Expr::Component(Box::new(self.simple(v, Ty::Known(QcType::Vector))), i),
+        }
+    }
+
+    fn replace_lane(&mut self, v: Expr, idx: u8, x: Expr) -> Expr {
+        if idx >= 3 {
+            return v;
+        }
+        if let (Expr::Vector(c), Expr::Float(f)) = (&v, &x) {
+            let mut c = *c;
+            c[idx as usize] = *f;
+            return Expr::Vector(c);
+        }
+        // Copy into a fresh temporary (the original may still be in use),
+        // then overwrite the component.
+        let tmp = self.new_temp(Ty::Known(QcType::Vector));
+        self.emit(Stmt::Assign(Expr::Local(tmp.clone()), v));
+        self.emit(Stmt::Assign(Expr::Component(Box::new(Expr::Local(tmp.clone())), idx), x));
+        Expr::Local(tmp)
+    }
+
+    fn splat(&mut self, x: Expr) -> Expr {
+        if let Expr::Float(f) = x {
+            return Expr::Vector([f; 3]);
+        }
+        let x = self.simple(x, Ty::Known(QcType::Float));
+        let tmp = self.new_temp(Ty::Known(QcType::Vector));
+        for i in 0..3 {
+            self.emit(Stmt::Assign(Expr::Component(Box::new(Expr::Local(tmp.clone())), i), x.clone()));
+        }
+        Expr::Local(tmp)
+    }
+
+    fn field_name(&self, offset: &Expr, ty: QcType) -> Result<String> {
+        let offset = Self::const_i32(offset, "entity field offset")?;
+        ensure!(offset >= 0, "negative entity field offset {offset}");
+        crate::sysdefs::field_at(offset as u32, ty)
+            .ok_or_else(|| anyhow!("entity field offset {offset} is not a known {} field", ty.name()))
+    }
+
     fn lower_call(&mut self, func: FunctionId) -> Result<()> {
         let info = self.ctx.funcs.get(&func).ok_or_else(|| anyhow!("call to unknown function"))?;
         let (name, sig, kind) = (info.name.clone(), info.sig.clone(), info.kind);
@@ -666,6 +763,30 @@ impl Lower<'_, '_> {
                 self.unify(Ty::Known(qt), ta, &name);
                 self.unify(Ty::Known(qt), tb, &name);
                 self.stack.push((Expr::Bin(op, Box::new(a), Box::new(b)), Ty::Known(QcType::Float)));
+            }
+            LoadField(qt) => {
+                let (offset, _) = self.pop()?;
+                let (ent, te) = self.pop()?;
+                let name = self.field_name(&offset, qt)?;
+                self.unify(Ty::Known(QcType::Entity), te, &name);
+                let ent = self.simple(ent, Ty::Known(QcType::Entity));
+                self.stack.push((Expr::Field(Box::new(ent), name), Ty::Known(qt)));
+            }
+            StoreField(qt) => {
+                let (v, t) = self.pop()?;
+                let (offset, _) = self.pop()?;
+                let (ent, te) = self.pop()?;
+                let name = self.field_name(&offset, qt)?;
+                self.unify(Ty::Known(QcType::Entity), te, &name);
+                self.unify(Ty::Known(qt), t, &format!("store to field `{name}`"));
+                let ent = self.simple(ent, Ty::Known(QcType::Entity));
+                let v = match v {
+                    // Function fields are `void()`; cast named functions.
+                    Expr::FuncName(_) => Expr::FnCast(Sig { params: vec![], ret: Ty::Known(QcType::Void) }, Box::new(v)),
+                    v => v,
+                };
+                self.spill_globals();
+                self.emit(Stmt::Assign(Expr::Field(Box::new(ent), name), v));
             }
             NotString | NotEntity => {
                 let qt = if intr == NotString { QcType::String } else { QcType::Entity };

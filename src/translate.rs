@@ -40,6 +40,10 @@ pub enum Intrinsic {
     NeEntity,
     NotString,
     NotEntity,
+    /// `__quakec_load_entity_field_<ty>(ent, field)`
+    LoadField(QcType),
+    /// `__quakec_store_entity_field_<ty>(ent, field, value)`
+    StoreField(QcType),
 }
 
 impl Intrinsic {
@@ -57,7 +61,22 @@ impl Intrinsic {
             "__quakec_ne_entity" => Self::NeEntity,
             "__quakec_not_string" => Self::NotString,
             "__quakec_not_entity" => Self::NotEntity,
-            _ => return None,
+            _ => {
+                let (load, ty) = if let Some(t) = name.strip_prefix("__quakec_load_entity_field_") {
+                    (true, t)
+                } else {
+                    (false, name.strip_prefix("__quakec_store_entity_field_")?)
+                };
+                let ty = match ty {
+                    "float" => QcType::Float,
+                    "vector" => QcType::Vector,
+                    "string" => QcType::String,
+                    "entity" => QcType::Entity,
+                    "fn" => QcType::Func,
+                    _ => return None,
+                };
+                if load { Self::LoadField(ty) } else { Self::StoreField(ty) }
+            }
         })
     }
 }
@@ -98,7 +117,11 @@ impl Ctx<'_> {
             ValType::I32 | ValType::F32 => Ty::Known(QcType::Float),
             ValType::Ref(r) if r == walrus::RefType::EXTERNREF => self.tv.fresh(),
             ValType::Ref(r) if r == walrus::RefType::FUNCREF => Ty::Known(QcType::Func),
-            other => bail!("unsupported value type {other:?} (only i32, f32, externref and funcref are supported)"),
+            // `@Vector(3, f32)`; the fourth lane is ignored.
+            ValType::V128 => Ty::Known(QcType::Vector),
+            other => bail!(
+                "unsupported value type {other:?} (only i32, f32, v128, externref and funcref are supported)"
+            ),
         })
     }
 

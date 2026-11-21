@@ -83,6 +83,40 @@ fn builtin_signature_mismatch_is_an_error() {
     assert!(err.contains("expected 0 parameters, but the import has 1"), "{err}");
 }
 
+#[test]
+fn zig_fields() {
+    // Built from `zig_fields.zig` against `zig-src/src/defs.zig`.
+    let wasm = std::fs::read(fixture("zig_fields.wasm")).unwrap();
+    insta::assert_snapshot!(translate_bytes(&wasm));
+    check_compiles(&wasm, "");
+}
+
+#[test]
+fn fields() {
+    insta::assert_snapshot!(translate_wat("fields.wat"));
+    check_compiles(&wat::parse_file(fixture("fields.wat")).unwrap(), "");
+}
+
+#[test]
+fn field_errors() {
+    let load = r#"(import "env" "__quakec_load_entity_field_float" (func (param externref i32) (result f32)))"#;
+    // A float access to a string field.
+    let err = translate_err(&format!(
+        r#"(module {load} (func (export "f") (param externref) (result f32) (call 0 (local.get 0) (i32.const 28))))"#
+    ));
+    assert!(err.contains("entity field offset 28 is not a known float field"), "{err}");
+    // Past the end of the system fields.
+    let err = translate_err(&format!(
+        r#"(module {load} (func (export "f") (param externref) (result f32) (call 0 (local.get 0) (i32.const 105))))"#
+    ));
+    assert!(err.contains("entity field offset 105 is not a known float field"), "{err}");
+    // A non-constant offset.
+    let err = translate_err(&format!(
+        r#"(module {load} (func (export "f") (param externref i32) (result f32) (call 0 (local.get 0) (local.get 1))))"#
+    ));
+    assert!(err.contains("entity field offset must be a compile-time constant"), "{err}");
+}
+
 fn translate_err(wat: &str) -> String {
     let wasm = wat::parse_str(wat).unwrap();
     match wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default()) {

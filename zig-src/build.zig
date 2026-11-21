@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
 
     const wasm_opt = b.addSystemCommand(&.{ "wasm-opt", "-Oz" });
     wasm_opt.addArtifactArg(libtest);
-    wasm_opt.addArgs(&.{ "--enable-reference-types", "--enable-bulk-memory-opt" });
+    wasm_opt.addArgs(&.{ "--enable-reference-types", "--enable-bulk-memory-opt", "--enable-simd", "--enable-tail-call" });
     wasm_opt.addArg("-o");
     const optimized = wasm_opt.addOutputFileArg2("test", .{});
 

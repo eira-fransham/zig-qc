@@ -189,21 +189,31 @@ pub enum Expr {
     /// Cast a function value to a particular signature.
     FnCast(Sig, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
+    /// A vector literal, `'x y z'`.
+    Vector([f32; 3]),
+    /// A component (0..3) of a vector local or global, e.g. `v_x`. The inner
+    /// expression must be an `Expr::Local` or `Expr::Global`.
+    Component(Box<Expr>, u8),
+    /// An entity field, `ent.name`. The entity must be an `Expr::Local` or
+    /// `Expr::Global`.
+    Field(Box<Expr>, String),
 }
 
 impl Expr {
     pub fn is_const(&self) -> bool {
-        matches!(self, Expr::Float(_) | Expr::Null | Expr::FuncName(_))
+        matches!(self, Expr::Float(_) | Expr::Null | Expr::FuncName(_) | Expr::Vector(_))
     }
 
     /// Whether evaluating this expression reads mutable global state (and so
     /// must be evaluated before any intervening call or store).
     pub fn reads_globals(&self) -> bool {
         match self {
-            Expr::Global(_) | Expr::Call(..) => true,
-            Expr::Float(_) | Expr::Null | Expr::Local(_) | Expr::FuncName(_) => false,
+            Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
+            Expr::Float(_) | Expr::Null | Expr::Local(_) | Expr::FuncName(_) | Expr::Vector(_) => {
+                false
+            }
             Expr::Bin(_, a, b) => a.reads_globals() || b.reads_globals(),
-            Expr::Un(_, a) | Expr::FnCast(_, a) => a.reads_globals(),
+            Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) => a.reads_globals(),
             Expr::Select(a, b, c) => a.reads_globals() || b.reads_globals() || c.reads_globals(),
         }
     }
@@ -211,9 +221,13 @@ impl Expr {
     pub fn reads_local(&self, name: &str) -> bool {
         match self {
             Expr::Local(n) => n == name,
-            Expr::Float(_) | Expr::Null | Expr::Global(_) | Expr::FuncName(_) => false,
+            Expr::Float(_) | Expr::Null | Expr::Global(_) | Expr::FuncName(_) | Expr::Vector(_) => {
+                false
+            }
             Expr::Bin(_, a, b) => a.reads_local(name) || b.reads_local(name),
-            Expr::Un(_, a) | Expr::FnCast(_, a) => a.reads_local(name),
+            Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) | Expr::Field(a, _) => {
+                a.reads_local(name)
+            }
             Expr::Select(a, b, c) => {
                 a.reads_local(name) || b.reads_local(name) || c.reads_local(name)
             }
@@ -261,6 +275,17 @@ impl Expr {
                 let _ = write!(out, "(({})", sig.render(tv));
                 f.render(tv, out);
                 out.push(')');
+            }
+            Expr::Vector([x, y, z]) => {
+                let _ = write!(out, "'{x} {y} {z}'");
+            }
+            Expr::Component(v, i) => {
+                v.render(tv, out);
+                out.push_str(["_x", "_y", "_z"][*i as usize]);
+            }
+            Expr::Field(e, name) => {
+                e.render(tv, out);
+                let _ = write!(out, ".{name}");
             }
             Expr::Call(f, args) => {
                 f.render(tv, out);

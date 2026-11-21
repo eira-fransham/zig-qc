@@ -186,8 +186,9 @@ extern fn __quakec_store_string(ptr: *align(4) volatile void, ent: StringRef) vo
 extern fn __quakec_store_fn(ptr: *align(4) volatile void, value: *addrspace(.funcref) const fn () callconv(.c) void) void;
 
 pub fn Global(comptime T: type) type {
-    const QCType = switch (@typeInfo(T)) {
-        .pointer => void,
+    // Entities and strings can't live in linear memory, so they are only
+    // accessed through the `__quakec_{load,store}_*` intrinsics.
+    const QCType = if (T == Entity or T == String) void else switch (@typeInfo(T)) {
         .int, .bool => f32,
         else => T,
     };
@@ -213,7 +214,7 @@ pub fn Global(comptime T: type) type {
                     } else if (T == String) {
                         return .{ .ref = __quakec_load_string(this.ptr) };
                     } else {
-                        this.ptr.*;
+                        return this.ptr.*;
                     }
                 },
             };
@@ -221,10 +222,10 @@ pub fn Global(comptime T: type) type {
 
         pub inline fn set(this: *const Self, value: Ty) void {
             return switch (@typeInfo(T)) {
-                .int => this.ptr.* = @intFromFloat(value),
+                .int => this.ptr.* = @floatFromInt(value),
                 .float => this.ptr.* = @as(QCType, value),
                 .bool => this.ptr.* = if (value) 1 else 0,
-                .@"fn" => __quakec_store_fn(this.ptr, @ptrCast(value)),
+                .@"fn" => __quakec_store_fn(@ptrCast(this.ptr), @ptrCast(value)),
                 else => {
                     if (T == Entity) {
                         __quakec_store_entity(this.ptr, value.ref);
@@ -274,26 +275,26 @@ pub const parm13 = global(u32, 55);
 pub const parm14 = global(u32, 56);
 pub const parm15 = global(u32, 57);
 pub const parm16 = global(u32, 58);
-pub const v_forward = global([3]f32, 59);
+pub const v_forward = global(Vector, 59);
 pub const v_forward_x = global(f32, 59);
 pub const v_forward_y = global(f32, 60);
 pub const v_forward_z = global(f32, 61);
-pub const v_up = global([3]f32, 62);
+pub const v_up = global(Vector, 62);
 pub const v_up_x = global(f32, 62);
 pub const v_up_y = global(f32, 63);
 pub const v_up_z = global(f32, 64);
-pub const v_right = global([3]f32, 65);
+pub const v_right = global(Vector, 65);
 pub const v_right_x = global(f32, 65);
 pub const v_right_y = global(f32, 66);
 pub const v_right_z = global(f32, 67);
 pub const trace_allsolid = global(bool, 68);
 pub const trace_startsolid = global(bool, 69);
 pub const trace_fraction = global(f32, 70);
-pub const trace_endpos = global([3]f32, 71);
+pub const trace_endpos = global(Vector, 71);
 pub const trace_endpos_x = global(f32, 71);
 pub const trace_endpos_y = global(f32, 72);
 pub const trace_endpos_z = global(f32, 73);
-pub const trace_plane_normal = global([3]f32, 74);
+pub const trace_plane_normal = global(Vector, 74);
 pub const trace_plane_normal_x = global(f32, 74);
 pub const trace_plane_normal_y = global(f32, 75);
 pub const trace_plane_normal_z = global(f32, 76);
