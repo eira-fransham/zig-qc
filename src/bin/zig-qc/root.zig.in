@@ -1,0 +1,5 @@
+const defs = @import("defs.zig");
+
+pub export fn main() void {
+    defs.dprint(defs.String.lit("hello from @NAME@\n"));
+}

@@ -2,6 +2,7 @@
 name = "wasm-to-qc"
 version = "0.1.0"
 edition = "2024"
+default-run = "wasm-to-qc"
 
 [dependencies]
 anyhow = "1"

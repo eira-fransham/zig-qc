@@ -1,0 +1,160 @@
+//! `zig-qc`: create and build Zig projects that compile to a QuakeC `progs.dat`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail, ensure};
+use clap::{Parser, Subcommand};
+
+const BUILD_ZIG: &str = include_str!("build.zig.in");
+const BUILD_ZIG_ZON: &str = include_str!("build.zig.zon.in");
+const ROOT_ZIG: &str = include_str!("root.zig.in");
+const DEFS_ZIG: &str = include_str!("../../../zig-src/src/defs.zig");
+
+/// Name of the wasm file `zig-qc build` asks `zig build` for.
+const BUILD_WASM: &str = "zig-qc-build.wasm";
+const BUILD_QC: &str = "zig-qc-build.qc";
+const OUT_DIR: &str = "zig-out/lib";
+
+/// Build QuakeC progs from Zig.
+#[derive(Parser)]
+struct Args {
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Set up a new project in the current directory.
+    Init {
+        /// Project name; must be a valid Zig identifier.
+        name: String,
+    },
+    /// Build the project in the current directory into `zig-out/lib/progs.dat`.
+    Build,
+}
+
+fn main() -> Result<()> {
+    match Args::parse().command {
+        Cmd::Init { name } => init(&name),
+        Cmd::Build => build(),
+    }
+}
+
+fn init(name: &str) -> Result<()> {
+    check_name(name)?;
+    let files = [
+        ("build.zig", BUILD_ZIG.replace("@NAME@", name)),
+        (
+            "build.zig.zon",
+            BUILD_ZIG_ZON.replace("@NAME@", name).replace("@FINGERPRINT@", &format!("{:#018x}", fingerprint(name))),
+        ),
+        ("src/defs.zig", DEFS_ZIG.to_string()),
+        ("src/root.zig", ROOT_ZIG.replace("@NAME@", name)),
+    ];
+    for (path, _) in &files {
+        ensure!(!Path::new(path).exists(), "`{path}` already exists; not overwriting it");
+    }
+    std::fs::create_dir_all("src").context("creating src")?;
+    for (path, contents) in &files {
+        std::fs::write(path, contents).with_context(|| format!("writing {path}"))?;
+        println!("created {path}");
+    }
+    println!("run `zig-qc build` to build zig-out/lib/progs.dat");
+    Ok(())
+}
+
+/// The name becomes the package's `.name` enum literal in `build.zig.zon`,
+/// so it must be a bare Zig identifier.
+fn check_name(name: &str) -> Result<()> {
+    const KEYWORDS: &[&str] = &[
+        "addrspace", "align", "allowzero", "and", "anyframe", "anytype", "asm", "break", "callconv", "catch",
+        "comptime", "const", "continue", "defer", "else", "enum", "errdefer", "error", "export", "extern", "fn",
+        "for", "if", "inline", "linksection", "noalias", "noinline", "nosuspend", "opaque", "or", "orelse",
+        "packed", "pub", "resume", "return", "struct", "suspend", "switch", "test", "threadlocal", "try", "union",
+        "unreachable", "var", "volatile", "while",
+    ];
+    let mut chars = name.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    ensure!(valid, "invalid project name `{name}`: it must be a Zig identifier (letters, digits and `_`, not starting with a digit)");
+    ensure!(!KEYWORDS.contains(&name), "invalid project name `{name}`: it is a Zig keyword");
+    ensure!(name.len() <= 32, "invalid project name `{name}`: it must be at most 32 characters");
+    Ok(())
+}
+
+/// A package fingerprint as Zig generates it: the CRC-32 of the name in the
+/// high half and a random id (never 0 or `u32::MAX`) in the low half. Zig
+/// 0.17 refuses to build without one.
+fn fingerprint(name: &str) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    let id = (h.finish() as u32).clamp(1, u32::MAX - 1);
+    (u64::from(crc32(name.as_bytes())) << 32) | u64::from(id)
+}
+
+/// CRC-32 (IEEE), as used by `std.hash.Crc32`.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+fn build() -> Result<()> {
+    let tools = [
+        ("zig", "install it from https://ziglang.org"),
+        ("wasm-opt", "install Binaryen from https://github.com/WebAssembly/binaryen"),
+        ("fteqcc", "install it from https://www.fteqcc.org"),
+    ];
+    let missing: Vec<String> = tools
+        .iter()
+        .filter(|(tool, _)| find_in_path(tool).is_none())
+        .map(|(tool, hint)| format!("`{tool}` was not found on the PATH; {hint}"))
+        .collect();
+    if !missing.is_empty() {
+        bail!("missing tools:\n  {}", missing.join("\n  "));
+    }
+    ensure!(Path::new("build.zig").exists(), "no build.zig in the current directory; run `zig-qc init <name>` first");
+
+    let status = Command::new("zig")
+        .args(["build", &format!("-Dout-name={BUILD_WASM}")])
+        .status()
+        .context("running zig build")?;
+    ensure!(status.success(), "zig build failed");
+
+    let out_dir = Path::new(OUT_DIR);
+    let wasm_path = out_dir.join(BUILD_WASM);
+    let wasm = std::fs::read(&wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
+    let out = wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default())
+        .with_context(|| format!("converting {}", wasm_path.display()))?;
+    for w in &out.warnings {
+        eprintln!("warning: {w}");
+    }
+    let qc_path = out_dir.join(BUILD_QC);
+    std::fs::write(&qc_path, out.source).with_context(|| format!("writing {}", qc_path.display()))?;
+
+    let src_path = out_dir.join("progs.src");
+    std::fs::write(&src_path, format!("progs.dat\n{BUILD_QC}\n"))
+        .with_context(|| format!("writing {}", src_path.display()))?;
+    let progs = out_dir.join("progs.dat");
+    if progs.exists() {
+        std::fs::remove_file(&progs).with_context(|| format!("removing {}", progs.display()))?;
+    }
+    let status = Command::new("fteqcc").arg("-Tid").current_dir(out_dir).status().context("running fteqcc")?;
+    ensure!(status.success() && progs.exists(), "fteqcc failed");
+
+    println!("wrote {}", progs.display());
+    Ok(())
+}
+
+/// Find an executable on the PATH, without running it.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(&file)).find(|p| p.is_file())
+}
