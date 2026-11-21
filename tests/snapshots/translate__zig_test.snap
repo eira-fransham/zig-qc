@@ -12,8 +12,8 @@ float doSomethingElse(entity p0);
 
 float doSomethingElse(entity p0) {
     local float l0;
-    l0 = ((float(float))main)(123);
-    l0 = doSomething(p0, world, l0);
+    ((void())main)();
+    l0 = doSomething(p0, world, time);
     v_up_x = l0;
     return l0;
 }

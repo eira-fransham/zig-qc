@@ -149,7 +149,7 @@ pub const trace_inwater = global(bool, 80);
 pub const msg_entity = global(Entity, 81);
 
 // Functions
-pub const main = global(fn (f32) f32, 82);
+pub const main = global(fn () void, 82);
 pub const StartFrame = global(fn () void, 83);
 pub const PlayerPreThink = global(fn () void, 84);
 pub const PlayerPostThink = global(fn () void, 85);

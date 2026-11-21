@@ -7,8 +7,8 @@ pub extern fn doSomething(foo: Entity, bar: Entity, baz: f32) f32;
 
 pub export fn doSomethingElse(foo: Entity) f32 {
     const main = defs.main.get();
-    const main_out = main(123);
-    const val = doSomething(foo, defs.world.get(), main_out);
+    main();
+    const val = doSomething(foo, defs.world.get(), defs.time.get());
     defs.v_up_x.set(val);
     return val;
 }
