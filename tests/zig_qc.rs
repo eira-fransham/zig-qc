@@ -108,3 +108,25 @@ fn init_and_build() {
     assert!(qc.contains(r#"dprint("hello from demo\n");"#), "{qc}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn init_name_from_directory() {
+    let dir = temp_dir();
+    let project = dir.join("1st-cool.mod");
+    std::fs::create_dir_all(&project).unwrap();
+    let out = zig_qc(&project, &["init"], None);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("using project name `_1st_cool_mod`"));
+    let zon = std::fs::read_to_string(project.join("build.zig.zon")).unwrap();
+    assert!(zon.contains(".name = ._1st_cool_mod,"), "{zon}");
+    assert!(zon.contains(".fingerprint = 0x66aa6823"), "{zon}");
+
+    // A directory name that can't be made into an identifier.
+    let project = dir.join("fn");
+    std::fs::create_dir_all(&project).unwrap();
+    let out = zig_qc(&project, &["init"], None);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("pass one explicitly"));
+    assert!(!project.join("build.zig").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}

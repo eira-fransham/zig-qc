@@ -27,8 +27,9 @@ struct Args {
 enum Cmd {
     /// Set up a new project in the current directory.
     Init {
-        /// Project name; must be a valid Zig identifier.
-        name: String,
+        /// Project name; defaults to the current directory's name. Must be a
+        /// valid Zig identifier.
+        name: Option<String>,
     },
     /// Build the project in the current directory into `zig-out/lib/progs.dat`.
     Build,
@@ -36,13 +37,31 @@ enum Cmd {
 
 fn main() -> Result<()> {
     match Args::parse().command {
-        Cmd::Init { name } => init(&name),
+        Cmd::Init { name } => init(name),
         Cmd::Build => build(),
     }
 }
 
-fn init(name: &str) -> Result<()> {
-    check_name(name)?;
+fn init(name: Option<String>) -> Result<()> {
+    let name = match name {
+        Some(name) => {
+            check_name(&name)?;
+            name
+        }
+        None => {
+            let cwd = std::env::current_dir().context("getting the current directory")?;
+            let dir = cwd.file_name().and_then(|d| d.to_str()).with_context(|| {
+                format!("can't make a project name from `{}`; pass one explicitly: `zig-qc init <name>`", cwd.display())
+            })?;
+            let name = sanitize_name(dir);
+            check_name(&name).with_context(|| {
+                format!("can't make a project name from directory `{dir}`; pass one explicitly: `zig-qc init <name>`")
+            })?;
+            println!("using project name `{name}` (from the current directory)");
+            name
+        }
+    };
+    let name = name.as_str();
     let files = [
         ("build.zig", BUILD_ZIG.replace("@NAME@", name)),
         (
@@ -81,6 +100,24 @@ fn check_name(name: &str) -> Result<()> {
     ensure!(!KEYWORDS.contains(&name), "invalid project name `{name}`: it is a Zig keyword");
     ensure!(name.len() <= 32, "invalid project name `{name}`: it must be at most 32 characters");
     Ok(())
+}
+
+/// Turn a directory name into a project name, like `zig init` does: `-`, `.`
+/// and spaces become `_`, other non-identifier characters are dropped, and a
+/// leading digit gets a `_` prefix. The result still goes through
+/// [`check_name`].
+fn sanitize_name(dir: &str) -> String {
+    let mut name = String::new();
+    for c in dir.chars() {
+        match c {
+            '0'..='9' if name.is_empty() => name.extend(['_', c]),
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => name.push(c),
+            '-' | '.' | ' ' => name.push('_'),
+            _ => {}
+        }
+    }
+    name.truncate(32);
+    name
 }
 
 /// A package fingerprint as Zig generates it: the CRC-32 of the name in the
