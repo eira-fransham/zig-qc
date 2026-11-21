@@ -56,14 +56,31 @@ fn zig_test() {
 #[test]
 fn control_flow() {
     insta::assert_snapshot!(translate_wat("control_flow.wat"));
-    // `builtin` imports are prototypes; the defs supply the numbered builtin.
-    check_compiles(&wat::parse_file(fixture("control_flow.wat")).unwrap(), "float(float v) floor = #37;\n");
+    check_compiles(&wat::parse_file(fixture("control_flow.wat")).unwrap(), "");
 }
 
 #[test]
 fn intrinsics() {
     insta::assert_snapshot!(translate_wat("intrinsics.wat"));
     check_compiles(&wat::parse_file(fixture("intrinsics.wat")).unwrap(), "");
+}
+
+#[test]
+fn builtins() {
+    insta::assert_snapshot!(translate_wat("builtins.wat"));
+    // Unknown `builtin` imports must be defined by the defs.
+    check_compiles(
+        &wat::parse_file(fixture("builtins.wat")).unwrap(),
+        "float(float x) my_engine_builtin = #500;\n",
+    );
+}
+
+#[test]
+fn builtin_signature_mismatch_is_an_error() {
+    let err = translate_err(r#"(module (import "builtin" "floor" (func (param externref) (result f32))))"#);
+    assert!(err.contains("parameter 0 should be float, but the import has externref"), "{err}");
+    let err = translate_err(r#"(module (import "builtin" "spawn" (func (param f32) (result externref))))"#);
+    assert!(err.contains("expected 0 parameters, but the import has 1"), "{err}");
 }
 
 fn translate_err(wat: &str) -> String {

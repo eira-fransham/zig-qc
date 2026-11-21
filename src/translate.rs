@@ -16,8 +16,9 @@ use crate::sysdefs::{self, GlobalMap};
 
 /// The name of the table LLVM uses to call `funcref`s.
 pub const CALL_TABLE: &str = "__funcref_call_table";
-/// Import module for known builtins. These are emitted as plain prototypes;
-/// the defs (e.g. `defs.qc`) supply the actual `= #N` definitions.
+/// Import module for numbered builtins. Vanilla NetQuake builtins are
+/// recognised by name and emitted as `= #N`; any others are emitted as plain
+/// prototypes, and the defs (e.g. `defs.qc`) must supply their definitions.
 pub const BUILTIN_MODULE: &str = "builtin";
 /// Import module for builtins without a number. These are emitted as
 /// `= #0`, which the engine resolves by name.
@@ -65,8 +66,9 @@ impl Intrinsic {
 pub enum FuncKind {
     /// Defined in this module.
     Local,
-    /// Imported from the `builtin` module; emitted as a prototype.
-    Builtin,
+    /// Imported from the `builtin` module: `= #N` if it is a known vanilla
+    /// builtin, otherwise a prototype.
+    Builtin(Option<u32>),
     /// Imported from the `unnamed-builtin` module; becomes `= #0`.
     UnnamedBuiltin,
     Intrinsic(Intrinsic),
@@ -174,7 +176,15 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                     .sig_of_type(ty)
                     .with_context(|| format!("in signature of import `{}`", import.name))?;
                 let kind = match import.module.as_str() {
-                    BUILTIN_MODULE => FuncKind::Builtin,
+                    BUILTIN_MODULE => match sysdefs::builtin(&import.name) {
+                        Some(b) => {
+                            check_builtin_sig(&mut ctx.tv, b, &sig).with_context(|| {
+                                format!("in import of vanilla builtin `{}` (#{})", b.name, b.number)
+                            })?;
+                            FuncKind::Builtin(Some(b.number))
+                        }
+                        None => FuncKind::Builtin(None),
+                    },
                     UNNAMED_BUILTIN_MODULE => FuncKind::UnnamedBuiltin,
                     ENV_MODULE => match Intrinsic::from_name(&import.name) {
                         Some(i) => FuncKind::Intrinsic(i),
@@ -284,7 +294,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     let mut imports: Vec<_> = ctx
         .funcs
         .values()
-        .filter(|f| matches!(f.kind, FuncKind::Builtin | FuncKind::UnnamedBuiltin))
+        .filter(|f| matches!(f.kind, FuncKind::Builtin(_) | FuncKind::UnnamedBuiltin))
         .collect();
     imports.sort_by(|a, b| a.name.cmp(&b.name));
     if !imports.is_empty() {
@@ -292,6 +302,9 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         for f in imports {
             let sig = f.sig.render(&mut tv);
             match f.kind {
+                FuncKind::Builtin(Some(n)) => {
+                    let _ = writeln!(out, "{sig} {} = #{n};", f.name);
+                }
                 FuncKind::UnnamedBuiltin => {
                     let _ = writeln!(out, "{sig} {} = #0;", f.name);
                 }
@@ -322,4 +335,37 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
 /// Make a wasm debug name usable as a QuakeC identifier.
 fn sanitize(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
+
+/// Check an imported builtin's wasm signature against its vanilla QuakeC
+/// signature, fixing the types of its externref parameters and result.
+fn check_builtin_sig(tv: &mut TypeVars, b: &sysdefs::Builtin, sig: &Sig) -> Result<()> {
+    if sig.params.len() != b.params.len() {
+        bail!(
+            "expected {} parameters, but the import has {}",
+            b.params.len(),
+            sig.params.len()
+        );
+    }
+    let slots = sig.params.iter().zip(b.params).map(|(&w, &q)| (w, q));
+    for (i, (wasm, qc)) in slots.chain(std::iter::once((sig.ret, b.ret))).enumerate() {
+        let what = if i < b.params.len() { format!("parameter {i}") } else { "return type".into() };
+        let ok = match (wasm, qc) {
+            (Ty::Known(w), q) => w == q,
+            // An externref: entity, string or field.
+            (Ty::Var(_), QcType::Entity | QcType::String | QcType::StringField) => {
+                tv.unify(wasm, Ty::Known(qc), &format!("builtin `{}` {what}", b.name));
+                true
+            }
+            (Ty::Var(_), _) => false,
+        };
+        if !ok {
+            let found = match wasm {
+                Ty::Known(w) => w.name().to_string(),
+                Ty::Var(_) => "externref".into(),
+            };
+            bail!("{what} should be {}, but the import has {found}", qc.name());
+        }
+    }
+    Ok(())
 }

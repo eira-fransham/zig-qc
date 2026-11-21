@@ -252,3 +252,95 @@ pub fn prelude(defined_func_proto: impl Fn(&str) -> Option<String>) -> String {
     out.push_str("void end_sys_fields;\n");
     out
 }
+
+/// A vanilla NetQuake builtin: name, number, return type and parameter types.
+pub struct Builtin {
+    pub name: &'static str,
+    pub number: u32,
+    pub ret: QcType,
+    pub params: &'static [QcType],
+}
+
+macro_rules! builtins {
+    ($($num:literal $name:literal : $ret:ident ( $($p:ident),* );)*) => {
+        &[$(Builtin {
+            name: $name,
+            number: $num,
+            ret: QcType::$ret,
+            params: &[$(QcType::$p),*],
+        }),*]
+    };
+}
+
+/// Vanilla NetQuake builtins (from `defs.qc`), excluding removed slots.
+pub const BUILTINS: &[Builtin] = builtins! {
+    1 "makevectors": Void(Vector);
+    2 "setorigin": Void(Entity, Vector);
+    3 "setmodel": Void(Entity, String);
+    4 "setsize": Void(Entity, Vector, Vector);
+    6 "break": Void();
+    7 "random": Float();
+    8 "sound": Void(Entity, Float, String, Float, Float);
+    9 "normalize": Vector(Vector);
+    10 "error": Void(String);
+    11 "objerror": Void(String);
+    12 "vlen": Float(Vector);
+    13 "vectoyaw": Float(Vector);
+    14 "spawn": Entity();
+    15 "remove": Void(Entity);
+    16 "traceline": Void(Vector, Vector, Float, Entity);
+    17 "checkclient": Entity();
+    18 "find": Entity(Entity, StringField, String);
+    19 "precache_sound": String(String);
+    20 "precache_model": String(String);
+    21 "stuffcmd": Void(Entity, String);
+    22 "findradius": Entity(Vector, Float);
+    23 "bprint": Void(String);
+    24 "sprint": Void(Entity, String);
+    25 "dprint": Void(String);
+    26 "ftos": String(Float);
+    27 "vtos": String(Vector);
+    28 "coredump": Void();
+    29 "traceon": Void();
+    30 "traceoff": Void();
+    31 "eprint": Void(Entity);
+    32 "walkmove": Float(Float, Float);
+    34 "droptofloor": Float();
+    35 "lightstyle": Void(Float, String);
+    36 "rint": Float(Float);
+    37 "floor": Float(Float);
+    38 "ceil": Float(Float);
+    40 "checkbottom": Float(Entity);
+    41 "pointcontents": Float(Vector);
+    43 "fabs": Float(Float);
+    44 "aim": Vector(Entity, Float);
+    45 "cvar": Float(String);
+    46 "localcmd": Void(String);
+    47 "nextent": Entity(Entity);
+    48 "particle": Void(Vector, Vector, Float, Float);
+    49 "ChangeYaw": Void();
+    51 "vectoangles": Vector(Vector);
+    52 "WriteByte": Void(Float, Float);
+    53 "WriteChar": Void(Float, Float);
+    54 "WriteShort": Void(Float, Float);
+    55 "WriteLong": Void(Float, Float);
+    56 "WriteCoord": Void(Float, Float);
+    57 "WriteAngle": Void(Float, Float);
+    58 "WriteString": Void(Float, String);
+    59 "WriteEntity": Void(Float, Entity);
+    67 "movetogoal": Void(Float);
+    68 "precache_file": String(String);
+    69 "makestatic": Void(Entity);
+    70 "changelevel": Void(String);
+    72 "cvar_set": Void(String, String);
+    73 "centerprint": Void(Entity, String);
+    74 "ambientsound": Void(Vector, String, Float, Float);
+    75 "precache_model2": String(String);
+    76 "precache_sound2": String(String);
+    77 "precache_file2": String(String);
+    78 "setspawnparms": Void(Entity);
+};
+
+pub fn builtin(name: &str) -> Option<&'static Builtin> {
+    BUILTINS.iter().find(|b| b.name == name)
+}

@@ -12,6 +12,9 @@ pub enum QcType {
     /// A function value whose signature is not statically known (stored as
     /// `void()`; cast at call sites).
     Func,
+    Vector,
+    /// A `.string` field reference.
+    StringField,
 }
 
 impl QcType {
@@ -22,6 +25,8 @@ impl QcType {
             QcType::Entity => "entity",
             QcType::String => "string",
             QcType::Func => "void()",
+            QcType::Vector => "vector",
+            QcType::StringField => ".string",
         }
     }
 }
