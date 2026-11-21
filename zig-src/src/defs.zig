@@ -114,29 +114,30 @@ pub const Entity = extern struct {
 
     ref: EntityRef,
 
-    // `inline` so that `field` reaches the intrinsic as an `i32.const`; the
-    // converter needs it to be a compile-time constant.
-    pub inline fn get(this: Self, comptime field: Field) field.Type() {
-        const offset = @backingInt(field);
-        return switch (field.Type()) {
+    // `inline` so that `field` reaches the intrinsic as a constant; the
+    // converter needs it to be a compile-time constant. `field` is a `Field`
+    // (e.g. `.health`) or a `UserField` (see `userField`).
+    pub inline fn get(this: Self, comptime field: anytype) FieldType(field) {
+        const offset = fieldOffset(field);
+        return switch (FieldType(field)) {
             f32 => __quakec_load_entity_field_float(this.ref, offset),
             Vector => __quakec_load_entity_field_vector(this.ref, offset),
             String => .{ .ref = __quakec_load_entity_field_string(this.ref, offset) },
             Entity => .{ .ref = __quakec_load_entity_field_entity(this.ref, offset) },
             Function => __quakec_load_entity_field_fn(this.ref, offset),
-            else => @compileError("unsupported field type " ++ @typeName(field.Type())),
+            else => @compileError("unsupported field type " ++ @typeName(FieldType(field))),
         };
     }
 
-    pub inline fn set(this: Self, comptime field: Field, value: field.Type()) void {
-        const offset = @backingInt(field);
-        switch (field.Type()) {
+    pub inline fn set(this: Self, comptime field: anytype, value: FieldType(field)) void {
+        const offset = fieldOffset(field);
+        switch (FieldType(field)) {
             f32 => __quakec_store_entity_field_float(this.ref, offset, value),
             Vector => __quakec_store_entity_field_vector(this.ref, offset, value),
             String => __quakec_store_entity_field_string(this.ref, offset, value.ref),
             Entity => __quakec_store_entity_field_entity(this.ref, offset, value.ref),
             Function => __quakec_store_entity_field_fn(this.ref, offset, value),
-            else => @compileError("unsupported field type " ++ @typeName(field.Type())),
+            else => @compileError("unsupported field type " ++ @typeName(FieldType(field))),
         }
     }
 
@@ -178,12 +179,21 @@ pub const String = extern struct {
     /// A string literal, e.g. `String.lit("progs/player.mdl")`. The bytes
     /// are placed in static data and the converter emits a QuakeC `"..."`.
     pub inline fn lit(comptime s: []const u8) String {
-        comptime {
-            if (std.mem.indexOfScalar(u8, s, 0) != null) @compileError("QuakeC strings can't contain NUL bytes");
-        }
+        if (!NoNul(s).ok) @compileError("QuakeC strings can't contain NUL bytes");
         return .{ .ref = __quakec_string_literal(s.ptr, s.len) };
     }
 };
+
+/// Checked in a container so that the check gets its own branch quota, rather than
+/// adding to that of the function using the literal.
+fn NoNul(comptime s: []const u8) type {
+    return struct {
+        const ok = blk: {
+            @setEvalBranchQuota(s.len * 4 + 1000);
+            break :blk std.mem.indexOfScalar(u8, s, 0) == null;
+        };
+    };
+}
 
 const EntityRef = *addrspace(.externref) const struct {};
 const StringRef = *addrspace(.externref) const struct {};
@@ -204,6 +214,104 @@ pub fn EntityField(comptime T: type) type {
 
 /// A QuakeC function value (`void()`), as stored in globals and fields.
 pub const Function = *addrspace(.funcref) const fn () callconv(.c) void;
+
+/// A user-defined entity field `.T name`, which the converter declares. See
+/// `userField`.
+pub fn UserField(comptime T: type) type {
+    return struct {
+        pub const Type = T;
+        name: [*:0]const u8,
+    };
+}
+
+/// Declare a user entity field, e.g.
+/// `pub const attack_finished = defs.userField(f32, "attack_finished");`,
+/// then use it like a system field: `e.get(attack_finished)`.
+pub fn userField(comptime T: type, comptime name: [:0]const u8) UserField(T) {
+    return .{ .name = name.ptr };
+}
+
+fn isSysField(comptime F: type) bool {
+    return F == Field or F == @TypeOf(.enum_literal);
+}
+
+/// The type of a system or user field.
+pub fn FieldType(comptime field: anytype) type {
+    return if (comptime isSysField(@TypeOf(field))) @as(Field, field).Type() else @TypeOf(field).Type;
+}
+
+/// System fields are passed to the intrinsics as their offset, user fields
+/// as the address of their name in static data.
+inline fn fieldOffset(comptime field: anytype) u32 {
+    return if (comptime isSysField(@TypeOf(field))) @backingInt(@as(Field, field)) else @intFromPtr(field.name);
+}
+
+/// A reference to a `.string` field, as passed to `find`.
+pub inline fn fieldRef(comptime field: anytype) EntityField(String) {
+    if (FieldType(field) != String) @compileError("only `.string` field references are supported");
+    return __quakec_field_ref_string(fieldOffset(field));
+}
+
+/// A Zig function as a QuakeC function value, e.g.
+/// `e.set(.think, defs.func(SUB_Remove))`. The function must use the C
+/// calling convention. Functions taking parameters can be stored too, and
+/// called with `callAs`.
+pub inline fn func(comptime f: anytype) Function {
+    return __quakec_func_ref(@ptrCast(&f));
+}
+
+/// View a function value as a function of type `F` (e.g.
+/// `fn (Entity, f32) callconv(.c) void`) so that it can be called.
+pub inline fn callAs(comptime F: type, f: Function) *addrspace(.funcref) const F {
+    return @ptrCast(f);
+}
+
+/// `a == b` (`EQ_FNC`).
+pub inline fn fnEql(a: Function, b: Function) bool {
+    return __quakec_eq_fn(a, b);
+}
+
+/// `a != b` (`NE_FNC`).
+pub inline fn fnNeq(a: Function, b: Function) bool {
+    return __quakec_ne_fn(a, b);
+}
+
+/// `!f` (`NOT_FNC`): whether this is the null function.
+pub inline fn fnIsNull(f: Function) bool {
+    return __quakec_not_fn(f);
+}
+
+/// `a == b` on vectors (`EQ_V`). Written as an intrinsic so that LLVM can't
+/// turn it into SIMD comparisons QuakeC doesn't have.
+pub inline fn vecEql(a: Vector, b: Vector) bool {
+    return __quakec_eq_vector(a, b);
+}
+
+/// `a != b` on vectors (`NE_V`).
+pub inline fn vecNeq(a: Vector, b: Vector) bool {
+    return __quakec_ne_vector(a, b);
+}
+
+/// `!v` (`NOT_V`): whether this is `'0 0 0'`.
+pub inline fn vecIsZero(v: Vector) bool {
+    return __quakec_not_vector(v);
+}
+
+/// `a * b` on vectors (`MUL_V`): the dot product.
+pub inline fn vecDot(a: Vector, b: Vector) f32 {
+    return __quakec_dot_vector(a, b);
+}
+
+extern fn __quakec_eq_vector(a: Vector, b: Vector) bool;
+extern fn __quakec_ne_vector(a: Vector, b: Vector) bool;
+extern fn __quakec_not_vector(v: Vector) bool;
+extern fn __quakec_dot_vector(a: Vector, b: Vector) f32;
+
+extern fn __quakec_field_ref_string(field: u32) EntityField(String);
+extern fn __quakec_func_ref(f: *const anyopaque) Function;
+extern fn __quakec_eq_fn(a: Function, b: Function) bool;
+extern fn __quakec_ne_fn(a: Function, b: Function) bool;
+extern fn __quakec_not_fn(f: Function) bool;
 
 // Entity field access. `field` is the field's offset (see `Field`), and must
 // be a compile-time constant. There is one intrinsic per type so the
@@ -233,21 +341,23 @@ extern fn __quakec_not_string(s: StringRef) bool;
 // a constant; the converter reads the bytes and emits a QuakeC literal.
 extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) StringRef;
 
-extern fn __quakec_load_entity(ptr: *const volatile void) EntityRef;
-extern fn __quakec_load_string(ptr: *const volatile void) StringRef;
-extern fn __quakec_load_fn(ptr: *const volatile void) *addrspace(.funcref) const fn () callconv(.c) void;
+// Globals. `ptr` is `slot * 4` for system globals, or the address of the
+// name of a user global (see `userGlobal`).
+extern fn __quakec_load_float(ptr: *const anyopaque) f32;
+extern fn __quakec_load_vector(ptr: *const anyopaque) Vector;
+extern fn __quakec_load_entity(ptr: *const anyopaque) EntityRef;
+extern fn __quakec_load_string(ptr: *const anyopaque) StringRef;
+extern fn __quakec_load_fn(ptr: *const anyopaque) Function;
 
-extern fn __quakec_store_entity(ptr: *align(4) volatile void, ent: EntityRef) void;
-extern fn __quakec_store_string(ptr: *align(4) volatile void, ent: StringRef) void;
-extern fn __quakec_store_fn(ptr: *align(4) volatile void, value: *addrspace(.funcref) const fn () callconv(.c) void) void;
+extern fn __quakec_store_float(ptr: *const anyopaque, value: f32) void;
+extern fn __quakec_store_vector(ptr: *const anyopaque, value: Vector) void;
+extern fn __quakec_store_entity(ptr: *const anyopaque, ent: EntityRef) void;
+extern fn __quakec_store_string(ptr: *const anyopaque, ent: StringRef) void;
+extern fn __quakec_store_fn(ptr: *const anyopaque, value: Function) void;
 
+/// A QuakeC global of type `T`: `f32` (or an integer or `bool`, stored as a
+/// float), `Vector`, `Entity`, `String`, or a function type.
 pub fn Global(comptime T: type) type {
-    // Entities and strings can't live in linear memory, so they are only
-    // accessed through the `__quakec_{load,store}_*` intrinsics.
-    const QCType = if (T == Entity or T == String) void else switch (@typeInfo(T)) {
-        .int, .bool => f32,
-        else => T,
-    };
     const Ty = switch (@typeInfo(T)) {
         .@"fn" => *addrspace(.funcref) const T,
         else => T,
@@ -256,60 +366,54 @@ pub fn Global(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        ptr: *align(4) volatile QCType,
+        ptr: *const anyopaque,
 
-        pub inline fn get(this: *const Self) Ty {
+        pub inline fn get(this: Self) Ty {
             return switch (@typeInfo(T)) {
-                .int => @intFromFloat(this.ptr.*),
-                .float => @as(T, this.ptr.*),
-                .bool => if (this.ptr.* == 0) false else true,
-                .@"fn" => @ptrCast(__quakec_load_fn(@ptrCast(this.ptr))),
-                else => {
-                    if (T == Entity) {
-                        return .{ .ref = __quakec_load_entity(this.ptr) };
-                    } else if (T == String) {
-                        return .{ .ref = __quakec_load_string(this.ptr) };
-                    } else if (T == Vector) {
-                        // One volatile load per component, so that LLVM
-                        // doesn't merge them into a wider load spanning
-                        // several QuakeC globals.
-                        const c: *align(4) const volatile [3]f32 = @ptrCast(this.ptr);
-                        return .{ c[0], c[1], c[2] };
-                    } else {
-                        return this.ptr.*;
-                    }
-                },
+                .int => @intFromFloat(__quakec_load_float(this.ptr)),
+                .float => @as(T, __quakec_load_float(this.ptr)),
+                .bool => __quakec_load_float(this.ptr) != 0,
+                .@"fn" => @ptrCast(__quakec_load_fn(this.ptr)),
+                else => if (T == Entity)
+                    .{ .ref = __quakec_load_entity(this.ptr) }
+                else if (T == String)
+                    .{ .ref = __quakec_load_string(this.ptr) }
+                else if (T == Vector)
+                    __quakec_load_vector(this.ptr)
+                else
+                    @compileError("unsupported global type " ++ @typeName(T)),
             };
         }
 
-        pub inline fn set(this: *const Self, value: Ty) void {
-            return switch (@typeInfo(T)) {
-                .int => this.ptr.* = @floatFromInt(value),
-                .float => this.ptr.* = @as(QCType, value),
-                .bool => this.ptr.* = if (value) 1 else 0,
-                .@"fn" => __quakec_store_fn(@ptrCast(this.ptr), @ptrCast(value)),
-                else => {
-                    if (T == Entity) {
-                        __quakec_store_entity(this.ptr, value.ref);
-                    } else if (T == String) {
-                        __quakec_store_string(this.ptr, value.ref);
-                    } else if (T == Vector) {
-                        // See `get`.
-                        const c: *align(4) volatile [3]f32 = @ptrCast(this.ptr);
-                        c[0] = value[0];
-                        c[1] = value[1];
-                        c[2] = value[2];
-                    } else {
-                        this.ptr.* = value;
-                    }
-                },
-            };
+        pub inline fn set(this: Self, value: Ty) void {
+            switch (@typeInfo(T)) {
+                .int => __quakec_store_float(this.ptr, @floatFromInt(value)),
+                .float => __quakec_store_float(this.ptr, value),
+                .bool => __quakec_store_float(this.ptr, if (value) 1 else 0),
+                .@"fn" => __quakec_store_fn(this.ptr, @ptrCast(value)),
+                else => if (T == Entity)
+                    __quakec_store_entity(this.ptr, value.ref)
+                else if (T == String)
+                    __quakec_store_string(this.ptr, value.ref)
+                else if (T == Vector)
+                    __quakec_store_vector(this.ptr, value)
+                else
+                    @compileError("unsupported global type " ++ @typeName(T)),
+            }
         }
     };
 }
 
-pub fn global(comptime T: type, comptime offset: comptime_int) Global(T) {
-    return .{ .ptr = @ptrFromInt(offset * 4) };
+/// A system global at `slot`.
+pub fn global(comptime T: type, comptime slot: comptime_int) Global(T) {
+    return .{ .ptr = @ptrFromInt(slot * 4) };
+}
+
+/// Declare a user global, e.g.
+/// `pub const activator = defs.userGlobal(Entity, "activator");`. The
+/// converter declares it in the QuakeC output. Zig `var`s can't be used.
+pub fn userGlobal(comptime T: type, comptime name: [:0]const u8) Global(T) {
+    return .{ .ptr = name.ptr };
 }
 
 pub const self = global(Entity, 28);

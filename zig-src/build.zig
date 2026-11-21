@@ -64,6 +64,7 @@ fn addOptLibrary(b: *std.Build, name: []const u8, root_module: *std.Build.Module
         "--enable-simd",
         "--enable-tail-call",
         "--enable-nontrapping-float-to-int",
+        "--enable-extended-const",
     });
     wasm_opt.addArg("-o");
     const optimized = wasm_opt.addOutputFileArg2(name, .{});

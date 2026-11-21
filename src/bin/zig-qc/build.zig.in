@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
         "--enable-simd",
         "--enable-tail-call",
         "--enable-nontrapping-float-to-int",
+        "--enable-extended-const",
     });
     wasm_opt.addArg("-o");
     const optimized = wasm_opt.addOutputFileArg2("@NAME@", .{});

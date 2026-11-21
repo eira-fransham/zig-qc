@@ -129,6 +129,16 @@ impl StaticData {
         Some(bytes)
     }
 
+    /// Read a NUL-terminated string at an absolute address (without the NUL),
+    /// and remember that it is string data.
+    pub fn c_string(&mut self, addr: u64) -> Option<Vec<u8>> {
+        let start = usize::try_from(addr.checked_sub(DATA_BASE)?).ok()?;
+        let len = self.bytes.get(start..)?.iter().position(|&b| b == 0)?;
+        let bytes = self.bytes[start..start + len].to_vec();
+        self.strings.push(addr..addr + len as u64 + 1);
+        Some(bytes)
+    }
+
     /// Generate `float __wasm_data_<kind>(float addr)`: a binary search over
     /// every aligned address outside of string literals, returning 0 for
     /// anything else.
@@ -179,7 +189,7 @@ fn search(entries: &[(f32, f32)]) -> Vec<Stmt> {
 }
 
 /// The offset of a data segment relative to `__memory_base`.
-fn relative_offset(offset: &ConstExpr, memory_base: Option<GlobalId>) -> Option<usize> {
+pub fn relative_offset(offset: &ConstExpr, memory_base: Option<GlobalId>) -> Option<usize> {
     let base = memory_base?;
     match offset {
         ConstExpr::Global(g) if *g == base => Some(0),

@@ -14,7 +14,7 @@ use walrus::{FunctionId, LocalFunction, LocalId};
 
 use crate::data::{DATA_BASE, DataKind, StaticData};
 use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
-use crate::translate::{Ctx, FuncKind, Intrinsic};
+use crate::translate::{Ctx, FuncKind, Intrinsic, TABLE_BASE};
 
 /// Largest integer magnitude exactly representable as an f32.
 const MAX_EXACT_INT: i32 = 1 << 24;
@@ -54,8 +54,13 @@ struct Lower<'a, 'm> {
     out: Vec<Stmt>,
     /// The most recent statement assigned a call result to this temporary.
     last_call_temp: Option<String>,
-    /// Locals that only ever hold `__memory_base` (see [`memory_base_locals`]).
-    base_locals: HashSet<LocalId>,
+    /// Locals that only ever hold `__memory_base` or `__table_base`, with
+    /// that base's value (see [`base_locals`]).
+    base_locals: HashMap<LocalId, f32>,
+    /// Locals known to hold a constant at this point of the lowering (they
+    /// were last assigned one on every path here). Reads of them become that
+    /// constant, so that addresses computed through locals stay constant.
+    known: HashMap<LocalId, f32>,
 }
 
 pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -> Result<Function> {
@@ -71,7 +76,8 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         params.push((n, ty));
     }
 
-    let base_locals = memory_base_locals(func, ctx.memory_base, &locals);
+    let bases = [(ctx.memory_base, DATA_BASE as f32), (ctx.table_base, TABLE_BASE as f32)];
+    let base_locals = base_locals(func, &bases, &locals);
     let mut l = Lower {
         ctx,
         func,
@@ -88,6 +94,7 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         out: Vec::new(),
         last_call_temp: None,
         base_locals,
+        known: HashMap::new(),
     };
 
     let entry = func.entry_block();
@@ -166,7 +173,7 @@ impl Lower<'_, '_> {
         if let [Expr::Float(x), Expr::Float(y), Expr::Float(z)] = *parts {
             return Expr::Vector([x, y, z]);
         }
-        if let Some(whole) = whole_vector(&parts) {
+        if let Some(whole) = whole_vector(self.ctx.defs, &parts) {
             return whole;
         }
         let tmp = self.new_temp(Ty::Known(QcType::Vector));
@@ -187,6 +194,26 @@ impl Lower<'_, '_> {
         let n = format!("{prefix}{}", self.next_label);
         self.next_label += 1;
         n
+    }
+
+    /// Forget the constants of locals assigned anywhere in `seqs`.
+    fn forget_assigned_in(&mut self, seqs: &[InstrSeqId]) {
+        if self.known.is_empty() {
+            return;
+        }
+        let mut todo = seqs.to_vec();
+        while let Some(seq) = todo.pop() {
+            for (instr, _) in &self.func.block(seq).instrs {
+                match instr {
+                    Instr::LocalSet(ir::LocalSet { local }) | Instr::LocalTee(ir::LocalTee { local }) => {
+                        self.known.remove(local);
+                    }
+                    Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => todo.push(*seq),
+                    Instr::IfElse(ir::IfElse { consequent, alternative }) => todo.extend([*consequent, *alternative]),
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn local(&mut self, id: LocalId) -> Result<(String, Ty)> {
@@ -254,11 +281,23 @@ impl Lower<'_, '_> {
         }
     }
 
-    /// Resolve a constant address into a QuakeC global.
-    fn global_at(&self, addr: &Expr, offset: u64, expect: QcType) -> Result<String> {
+    /// Resolve a constant address into a QuakeC global: a system global slot,
+    /// or (in static data) the name of a user global. A vector global is
+    /// addressed by its first component.
+    fn global_at(&mut self, addr: &Expr, offset: u64, expect: QcType) -> Result<String> {
         let base = Self::const_i32(addr, "memory address")?;
         let addr = base as i64 + offset as i64;
         ensure!(addr >= 0, "negative memory address {addr}");
+        if StaticData::is_data_addr(addr as u64) {
+            return self.ctx.user_name(addr as u64, expect, false);
+        }
+        if expect == QcType::Vector {
+            let slot = self.ctx.globals.by_addr(addr as u64);
+            return match slot.and_then(|s| s.vector.filter(|_| s.name.ends_with("_x"))) {
+                Some(v) => Ok(v.to_string()),
+                None => bail!("memory address {addr} is not a vector QuakeC global"),
+            };
+        }
         let slot = self
             .ctx
             .globals
@@ -275,6 +314,10 @@ impl Lower<'_, '_> {
     }
 
     fn set_local(&mut self, id: LocalId, v: Expr, t: Ty) -> Result<()> {
+        match v {
+            Expr::Float(c) => self.known.insert(id, c),
+            _ => self.known.remove(&id),
+        };
         let (name, lt) = self.local(id)?;
         self.unify(lt, t, &format!("assignment to local `{name}`"));
         let n = name.clone();
@@ -410,6 +453,7 @@ impl Lower<'_, '_> {
                 self.label_of.insert(*seq, idx);
                 let height = self.stack.len();
                 let (body, live) = self.lower_nested(*seq)?;
+                self.forget_assigned_in(&[*seq]);
                 self.out.extend(body);
                 self.finish_block(height, live, &result)?;
                 if self.labels[idx].used {
@@ -427,7 +471,10 @@ impl Lower<'_, '_> {
                 self.labels.push(Label { name: name.clone(), kind: LabelKind::Loop, result: None, used: false });
                 self.label_of.insert(*seq, idx);
                 let height = self.stack.len();
+                // The back edge may bring other values.
+                self.forget_assigned_in(&[*seq]);
                 let (body, live) = self.lower_nested(*seq)?;
+                self.forget_assigned_in(&[*seq]);
                 if self.labels[idx].used {
                     self.emit(Stmt::Label(name));
                 }
@@ -448,12 +495,15 @@ impl Lower<'_, '_> {
                 self.label_of.insert(*alternative, idx);
                 let height = self.stack.len();
 
+                let entry = self.known.clone();
                 let (mut then_body, then_live) = self.lower_nested(*consequent)?;
                 std::mem::swap(&mut self.out, &mut then_body);
                 self.finish_block(height, then_live, &result)?;
                 std::mem::swap(&mut self.out, &mut then_body);
 
+                self.known = entry;
                 let (mut else_body, else_live) = self.lower_nested(*alternative)?;
+                self.forget_assigned_in(&[*consequent, *alternative]);
                 std::mem::swap(&mut self.out, &mut else_body);
                 self.finish_block(height, else_live, &result)?;
                 std::mem::swap(&mut self.out, &mut else_body);
@@ -550,15 +600,20 @@ impl Lower<'_, '_> {
                 self.stack.push((Expr::Select(Box::new(c), Box::new(a), Box::new(b)), ta));
                 Ok(true)
             }
-            Instr::LocalGet(ir::LocalGet { local }) if self.base_locals.contains(local) => {
-                self.stack.push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
+            Instr::LocalGet(ir::LocalGet { local }) if self.base_locals.contains_key(local) => {
+                self.stack.push((Expr::Float(self.base_locals[local]), Ty::Known(QcType::Float)));
                 Ok(true)
             }
-            Instr::LocalSet(ir::LocalSet { local }) if self.base_locals.contains(local) => {
+            Instr::LocalSet(ir::LocalSet { local }) if self.base_locals.contains_key(local) => {
                 self.pop()?;
                 Ok(true)
             }
-            Instr::LocalTee(ir::LocalTee { local }) if self.base_locals.contains(local) => Ok(true),
+            Instr::LocalTee(ir::LocalTee { local }) if self.base_locals.contains_key(local) => Ok(true),
+            Instr::LocalGet(ir::LocalGet { local }) if self.known.contains_key(local) => {
+                let (_, t) = self.local(*local)?;
+                self.stack.push((Expr::Float(self.known[local]), t));
+                Ok(true)
+            }
             Instr::LocalGet(ir::LocalGet { local }) => {
                 let (n, t) = self.local(*local)?;
                 self.stack.push((Expr::Local(n), t));
@@ -573,11 +628,19 @@ impl Lower<'_, '_> {
                 let (v, t) = self.pop()?;
                 self.set_local(*local, v, t)?;
                 let (n, t) = self.local(*local)?;
-                self.stack.push((Expr::Local(n), t));
+                let e = match self.known.get(local) {
+                    Some(&c) => Expr::Float(c),
+                    None => Expr::Local(n),
+                };
+                self.stack.push((e, t));
                 Ok(true)
             }
             Instr::GlobalGet(ir::GlobalGet { global }) if Some(*global) == self.ctx.memory_base => {
                 self.stack.push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
+                Ok(true)
+            }
+            Instr::GlobalGet(ir::GlobalGet { global }) if Some(*global) == self.ctx.table_base => {
+                self.stack.push((Expr::Float(TABLE_BASE as f32), Ty::Known(QcType::Float)));
                 Ok(true)
             }
             Instr::GlobalGet(ir::GlobalGet { global }) => {
@@ -663,6 +726,13 @@ impl Lower<'_, '_> {
                 }
                 Ok(true)
             }
+            Instr::Binop(ir::Binop { op: op @ (BinaryOp::F32x4Mul | BinaryOp::F32x4Div) }) => {
+                let (b, _) = self.pop_raw()?;
+                let (a, _) = self.pop_raw()?;
+                let e = self.vector_mul_div(matches!(op, BinaryOp::F32x4Div), a, b);
+                self.stack.push((e, Ty::Known(QcType::Vector)));
+                Ok(true)
+            }
             Instr::Binop(ir::Binop { op }) => {
                 let (b, _) = self.pop()?;
                 let (a, _) = self.pop()?;
@@ -729,7 +799,8 @@ impl Lower<'_, '_> {
             }
             Instr::RefFunc(ir::RefFunc { func }) => {
                 let name = self.ctx.funcs.get(func).map(|f| f.name.clone()).ok_or_else(|| anyhow!("unknown function"))?;
-                self.stack.push((Expr::FuncName(name), Ty::Known(QcType::Func)));
+                let f = self.func_value(name);
+                self.stack.push((f, Ty::Known(QcType::Func)));
                 Ok(true)
             }
             Instr::Load(ir::Load { kind, arg, .. }) => {
@@ -755,7 +826,11 @@ impl Lower<'_, '_> {
                 if let Expr::Float(a) = addr
                     && StaticData::is_data_addr(a as u64 + arg.offset)
                 {
-                    bail!("writes to static data are not supported yet (address {})", a as u64 + arg.offset);
+                    bail!(
+                        "writes to static data are not supported (address {}); Zig `var` globals \
+                         can't be used, declare QuakeC globals with `defs.userGlobal` instead",
+                        a as u64 + arg.offset
+                    );
                 }
                 match kind {
                     StoreKind::F32 => {
@@ -821,11 +896,41 @@ impl Lower<'_, '_> {
     /// named function with that signature, or any other function value
     /// (always `void()`) when `sig` is `void()`.
     fn fn_cast(&self, sig: &Sig, f: Expr) -> Expr {
+        let f = match f {
+            Expr::FnCast(_, inner) => *inner,
+            f => f,
+        };
         let own = match &f {
             Expr::FuncName(n) => self.ctx.funcs.values().find(|i| i.name == *n).map(|i| i.sig.clone()),
             _ => Some(Sig::void()),
         };
         if own.as_ref() == Some(sig) { f } else { Expr::FnCast(sig.clone(), Box::new(f)) }
+    }
+
+    /// A function value, which always has type `void()` (see [`Self::fn_cast`]).
+    fn func_value(&self, name: String) -> Expr {
+        self.fn_cast(&Sig::void(), Expr::FuncName(name))
+    }
+
+    /// The QuakeC function a Zig function pointer (an index into
+    /// `__indirect_function_table`) refers to. Must be a constant, or a
+    /// `select` between constants.
+    fn func_ref(&self, ptr: &Expr) -> Result<Expr> {
+        match ptr {
+            Expr::Float(i) => {
+                let f = self
+                    .ctx
+                    .table_funcs
+                    .get(&(*i as u64))
+                    .with_context(|| format!("function pointer {i} is not in `__indirect_function_table`"))?;
+                let name = self.ctx.funcs.get(f).map(|f| f.name.clone()).context("unknown function")?;
+                Ok(self.func_value(name))
+            }
+            Expr::Select(c, a, b) => {
+                Ok(Expr::Select(c.clone(), Box::new(self.func_ref(a)?), Box::new(self.func_ref(b)?)))
+            }
+            other => bail!("function pointer passed to `__quakec_func_ref` is not a constant: `{other:?}`"),
+        }
     }
 
     fn lower_call_indirect(&mut self, ty: walrus::TypeId, table: walrus::TableId) -> Result<()> {
@@ -886,6 +991,41 @@ impl Lower<'_, '_> {
         Expr::MakeVector(Box::new(parts))
     }
 
+    /// `a * b` or `a / b` on vectors. QuakeC can only scale a vector by a
+    /// float, so multiplying by a splat becomes `v * f`; anything else is done
+    /// component by component.
+    fn vector_mul_div(&mut self, div: bool, a: Expr, b: Expr) -> Expr {
+        let splat_of = |e: &Expr| match e {
+            Expr::Vector([x, y, z]) if x == y && y == z => Some(Expr::Float(*x)),
+            Expr::MakeVector(p) if p[0] == p[1] && p[1] == p[2] => Some(p[0].clone()),
+            _ => None,
+        };
+        if let Some(f) = splat_of(&b) {
+            let a = self.materialize(a);
+            let f = if div { fold(BinOp::Div, Expr::Float(1.0), f) } else { f };
+            return Expr::Bin(BinOp::Mul, Box::new(a), Box::new(f));
+        }
+        if !div && let Some(f) = splat_of(&a) {
+            let b = self.materialize(b);
+            return Expr::Bin(BinOp::Mul, Box::new(b), Box::new(f));
+        }
+        let lanes = |this: &mut Self, v: Expr| -> [Expr; 3] {
+            let v = match v {
+                v @ (Expr::Vector(_) | Expr::MakeVector(_) | Expr::Local(_) | Expr::Global(_)) => v,
+                v => {
+                    let v = this.materialize(v);
+                    this.simple(v, Ty::Known(QcType::Vector))
+                }
+            };
+            [0, 1, 2].map(|i| this.extract_lane(v.clone(), i))
+        };
+        let (a, b) = (lanes(self, a), lanes(self, b));
+        let op = if div { BinOp::Div } else { BinOp::Mul };
+        let [a0, a1, a2] = a;
+        let [b0, b1, b2] = b;
+        Expr::MakeVector(Box::new([fold(op, a0, b0), fold(op, a1, b1), fold(op, a2, b2)]))
+    }
+
     fn splat(&mut self, x: Expr) -> Expr {
         if let Expr::Float(f) = x {
             return Expr::Vector([f; 3]);
@@ -894,10 +1034,16 @@ impl Lower<'_, '_> {
         Expr::MakeVector(Box::new([x.clone(), x.clone(), x]))
     }
 
-    fn field_name(&self, offset: &Expr, ty: QcType) -> Result<String> {
+    fn field_name(&mut self, offset: &Expr, ty: QcType) -> Result<String> {
         let offset = Self::const_i32(offset, "entity field offset")?;
         ensure!(offset >= 0, "negative entity field offset {offset}");
-        crate::sysdefs::field_at(offset as u32, ty)
+        if StaticData::is_data_addr(offset as u64) {
+            // A user field, named by a string in static data.
+            return self.ctx.user_name(offset as u64, ty, true);
+        }
+        self.ctx
+            .defs
+            .field_at(offset as u32, ty)
             .ok_or_else(|| anyhow!("entity field offset {offset} is not a known {} field", ty.name()))
     }
 
@@ -941,8 +1087,10 @@ impl Lower<'_, '_> {
 
         use Intrinsic::*;
         match intr {
-            LoadEntity | LoadString | LoadFn => {
+            LoadFloat | LoadVector | LoadEntity | LoadString | LoadFn => {
                 let qt = match intr {
+                    LoadFloat => QcType::Float,
+                    LoadVector => QcType::Vector,
                     LoadEntity => QcType::Entity,
                     LoadString => QcType::String,
                     _ => QcType::Func,
@@ -951,8 +1099,10 @@ impl Lower<'_, '_> {
                 let g = self.global_at(&addr, 0, qt)?;
                 self.stack.push((Expr::Global(g), Ty::Known(qt)));
             }
-            StoreEntity | StoreString | StoreFn => {
+            StoreFloat | StoreVector | StoreEntity | StoreString | StoreFn => {
                 let qt = match intr {
+                    StoreFloat => QcType::Float,
+                    StoreVector => QcType::Vector,
                     StoreEntity => QcType::Entity,
                     StoreString => QcType::String,
                     _ => QcType::Func,
@@ -1007,6 +1157,30 @@ impl Lower<'_, '_> {
                 let (ptr, _) = self.pop()?;
                 let s = self.string_literal(&ptr, &len)?;
                 self.stack.push((s, Ty::Known(QcType::String)));
+            }
+            EqFn | NeFn | EqVector | NeVector | DotVector => {
+                let op = match intr {
+                    EqFn | EqVector => BinOp::Eq,
+                    NeFn | NeVector => BinOp::Ne,
+                    _ => BinOp::Mul,
+                };
+                let (b, _) = self.pop()?;
+                let (a, _) = self.pop()?;
+                self.stack.push((Expr::Bin(op, Box::new(a), Box::new(b)), Ty::Known(QcType::Float)));
+            }
+            FuncRef => {
+                let (ptr, _) = self.pop()?;
+                let f = self.func_ref(&ptr)?;
+                self.stack.push((f, Ty::Known(QcType::Func)));
+            }
+            FieldRefString => {
+                let (offset, _) = self.pop()?;
+                let name = self.field_name(&offset, QcType::String)?;
+                self.stack.push((Expr::Global(name), Ty::Known(QcType::StringField)));
+            }
+            NotFn | NotVector => {
+                let (a, _) = self.pop()?;
+                self.stack.push((Expr::Un(UnOp::Not, Box::new(a)), Ty::Known(QcType::Float)));
             }
             NotString | NotEntity => {
                 let qt = if intr == NotString { QcType::String } else { QcType::Entity };
@@ -1086,7 +1260,7 @@ fn lower_unop(op: UnaryOp, a: Expr) -> Result<Expr> {
 
 /// If `parts` are exactly the `_x`, `_y` and `_z` components of one vector
 /// global or vector field, return that whole vector.
-fn whole_vector(parts: &[Expr; 3]) -> Option<Expr> {
+fn whole_vector(defs: &crate::sysdefs::SysDefs, parts: &[Expr; 3]) -> Option<Expr> {
     let base = |e: &Expr, suffix: &str| -> Option<(Option<Expr>, String)> {
         match e {
             Expr::Global(n) => Some((None, n.strip_suffix(suffix)?.to_string())),
@@ -1109,39 +1283,49 @@ fn whole_vector(parts: &[Expr; 3]) -> Option<Expr> {
         return None;
     }
     match ent {
-        None if crate::sysdefs::is_vector_global(&name) => Some(Expr::Global(name)),
-        Some(ent) if crate::sysdefs::is_vector_field(&name) => Some(Expr::Field(Box::new(ent), name)),
+        None if defs.is_vector_global(&name) => Some(Expr::Global(name)),
+        Some(ent) if defs.is_vector_field(&name) => Some(Expr::Field(Box::new(ent), name)),
         _ => None,
     }
 }
 
-/// Locals whose every write is `global.get __memory_base` immediately
-/// followed by `local.set`/`local.tee`. LLVM often keeps the base in a local
-/// when it computes several data addresses; treating reads of it as the
-/// constant [`DATA_BASE`] keeps those addresses constant.
-fn memory_base_locals(
+/// Locals whose every write is `global.get` of one of `bases` (always the
+/// same one) immediately followed by `local.set`/`local.tee`, mapped to that
+/// base's value. LLVM often keeps `__memory_base` or `__table_base` in a local
+/// when it computes several addresses; treating reads of it as a constant
+/// keeps those addresses constant.
+fn base_locals(
     func: &LocalFunction,
-    memory_base: Option<walrus::GlobalId>,
+    bases: &[(Option<walrus::GlobalId>, f32)],
     params: &HashMap<LocalId, (String, Ty)>,
-) -> HashSet<LocalId> {
-    let Some(base) = memory_base else { return HashSet::new() };
-    let mut good = HashSet::new();
+) -> HashMap<LocalId, f32> {
+    let mut good: HashMap<LocalId, f32> = HashMap::new();
     let mut bad = HashSet::new();
     let mut seqs = vec![func.entry_block()];
     while let Some(seq) = seqs.pop() {
-        let mut prev_is_base = false;
+        let mut prev: Option<f32> = None;
         for (instr, _) in &func.block(seq).instrs {
             match instr {
-                Instr::LocalSet(ir::LocalSet { local }) | Instr::LocalTee(ir::LocalTee { local }) => {
-                    if prev_is_base { &mut good } else { &mut bad }.insert(*local);
-                }
+                Instr::LocalSet(ir::LocalSet { local }) | Instr::LocalTee(ir::LocalTee { local }) => match prev {
+                    Some(v) if good.get(local).is_none_or(|&g| g == v) => {
+                        good.insert(*local, v);
+                    }
+                    _ => {
+                        bad.insert(*local);
+                    }
+                },
                 Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => seqs.push(*seq),
                 Instr::IfElse(ir::IfElse { consequent, alternative }) => seqs.extend([*consequent, *alternative]),
                 _ => {}
             }
-            prev_is_base = matches!(instr, Instr::GlobalGet(ir::GlobalGet { global }) if *global == base);
+            prev = match instr {
+                Instr::GlobalGet(ir::GlobalGet { global }) => {
+                    bases.iter().find(|(b, _)| *b == Some(*global)).map(|&(_, v)| v)
+                }
+                _ => None,
+            };
         }
     }
-    good.retain(|l| !bad.contains(l) && !params.contains_key(l));
+    good.retain(|l, _| !bad.contains(l) && !params.contains_key(l));
     good
 }

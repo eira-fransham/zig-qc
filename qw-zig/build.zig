@@ -1,0 +1,51 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    // wasm32 with every feature enabled (notably reference types, SIMD and
+    // tail calls), which is what zig-qc expects.
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+        .cpu_model = .{
+            .explicit = &.{
+                .name = "bleeding_edge",
+                .llvm_name = "bleeding-edge",
+                .features = .{
+                    .ints = .{ 260083, 0, 0, 0, 0, 0 },
+                },
+            },
+        },
+    });
+
+    const out_name = b.option([]const u8, "out-name", "Name of the installed .wasm file") orelse "qw_zig.wasm";
+
+    const lib = b.addLibrary(.{
+        .name = "qw_zig-unopt",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = .small,
+            .pic = true,
+            .strip = true,
+        }),
+    });
+
+    // Optimise the module with `wasm-opt`, then install it as
+    // `lib/<out-name>`.
+    const wasm_opt = b.addSystemCommand(&.{ "wasm-opt", "-Oz" });
+    wasm_opt.addArtifactArg(lib);
+    wasm_opt.addArgs(&.{
+        "--enable-reference-types",
+        "--enable-bulk-memory-opt",
+        "--enable-simd",
+        "--enable-tail-call",
+        "--enable-nontrapping-float-to-int",
+        "--enable-extended-const",
+    });
+    wasm_opt.addArg("-o");
+    const optimized = wasm_opt.addOutputFileArg2("qw_zig", .{});
+
+    const install = b.addInstallLibFile(optimized, out_name);
+    b.getInstallStep().dependOn(&install.step);
+}

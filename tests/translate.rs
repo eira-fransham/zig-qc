@@ -138,7 +138,7 @@ fn static_data_errors() {
         r#"(module {base} (data (global.get $b) "\00\00\00\00")
             (func (export "f") (f32.store (global.get $b) (f32.const 1))))"#
     ));
-    assert!(err.contains("writes to static data are not supported yet"), "{err}");
+    assert!(err.contains("writes to static data are not supported"), "{err}");
     let err = translate_err(r#"(module (memory 1) (data (i32.const 64) "\01"))"#);
     assert!(err.contains("is not relative to `__memory_base`"), "{err}");
     let err = translate_err(&format!(

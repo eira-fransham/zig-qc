@@ -161,3 +161,39 @@ pub export fn damage_twice(e: Entity, amount: f32) f32 {
     _ = helper(e, amount);
     return helper(e, amount * 2);
 }
+
+// ---- user globals and fields, function values ----
+
+const activator = defs.userGlobal(Entity, "activator");
+const counter = defs.userGlobal(f32, "counter");
+const last_dir = defs.userGlobal(Vector, "last_dir");
+const on_done = defs.userGlobal(fn () callconv(.c) void, "on_done");
+const attack_finished = defs.userField(f32, "attack_finished");
+const goal = defs.userField(Vector, "goal");
+const th_pain = defs.userField(defs.Function, "th_pain");
+
+fn bump() callconv(.c) void {
+    counter.set(counter.get() + 1);
+}
+
+fn pain(attacker: Entity, damage: f32) callconv(.c) void {
+    attacker.set(.health, attacker.get(.health) - damage);
+}
+
+/// User globals and fields, references to Zig functions, `find` with a field
+/// reference, and function comparisons.
+pub export fn user_defs(e: Entity) void {
+    activator.set(e);
+    last_dir.set(e.get(.velocity));
+    e.set(attack_finished, defs.time.get() + 1);
+    e.set(goal, last_dir.get());
+    e.set(.think, defs.func(bump));
+    e.set(th_pain, defs.func(pain));
+    on_done.set(defs.func(bump));
+    if (defs.fnNeq(e.get(.think), defs.func(helperThink))) e.set(.nextthink, defs.time.get());
+    if (!defs.fnIsNull(e.get(th_pain))) defs.callAs(fn (Entity, f32) callconv(.c) void, e.get(th_pain))(activator.get(), 5);
+    const spot = defs.find(defs.world.get(), defs.fieldRef(.classname), String.lit("info_player_start"));
+    if (!spot.isNull()) e.set(.origin, spot.get(.origin));
+}
+
+fn helperThink() callconv(.c) void {}

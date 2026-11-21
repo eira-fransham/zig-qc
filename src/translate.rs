@@ -1,19 +1,20 @@
 //! Module-level translation: classify imports/exports, lower each function,
 //! then resolve types and render QuakeC source.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, bail, ensure};
+use walrus::ir::Value;
 use walrus::{
-    ExportItem, FunctionId, FunctionKind, GlobalId, GlobalKind, ImportKind, Module, TableId,
-    ValType,
+    ConstExpr, ElementItems, ElementKind, ExportItem, FunctionId, FunctionKind, GlobalId, GlobalKind, ImportKind,
+    Module, TableId, ValType,
 };
 
-use crate::data::{DataKind, StaticData};
+use crate::data::{DATA_BASE, DataKind, StaticData, relative_offset};
 use crate::lower;
 use crate::qc::{QcType, Sig, Ty, TypeVars};
-use crate::sysdefs::{self, GlobalMap};
+use crate::sysdefs::{self, GlobalMap, SysDefs};
 
 /// The name of the table LLVM uses to call `funcref`s.
 pub const CALL_TABLE: &str = "__funcref_call_table";
@@ -26,9 +27,21 @@ pub const BUILTIN_MODULE: &str = "builtin";
 pub const UNNAMED_BUILTIN_MODULE: &str = "unnamed-builtin";
 /// Import module for memory, the call table and `__quakec_*` intrinsics.
 pub const ENV_MODULE: &str = "env";
+/// The table holding the targets of Zig function pointers.
+pub const INDIRECT_TABLE: &str = "__indirect_function_table";
+/// An exported (data) symbol naming the system defs to use, e.g.
+/// `"quakeworld"`. Defaults to vanilla NetQuake.
+pub const TARGET_EXPORT: &str = "__quakec_target";
+/// The value given to the imported `__table_base`, so that function pointers
+/// are plain table indices.
+pub const TABLE_BASE: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Intrinsic {
+    LoadFloat,
+    LoadVector,
+    StoreFloat,
+    StoreVector,
     LoadEntity,
     LoadString,
     LoadFn,
@@ -41,6 +54,18 @@ pub enum Intrinsic {
     NeEntity,
     NotString,
     NotEntity,
+    EqFn,
+    NeFn,
+    NotFn,
+    EqVector,
+    NeVector,
+    NotVector,
+    /// `__quakec_dot_vector(a, b)`: `a * b` on vectors (`MUL_V`).
+    DotVector,
+    /// `__quakec_func_ref(fnptr)`: a Zig function pointer as a QuakeC function.
+    FuncRef,
+    /// `__quakec_field_ref_string(field)`: a `.string` field reference.
+    FieldRefString,
     /// `__quakec_string_literal(ptr, len)`
     StringLiteral,
     /// `__quakec_load_entity_field_<ty>(ent, field)`
@@ -52,6 +77,10 @@ pub enum Intrinsic {
 impl Intrinsic {
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
+            "__quakec_load_float" => Self::LoadFloat,
+            "__quakec_load_vector" => Self::LoadVector,
+            "__quakec_store_float" => Self::StoreFloat,
+            "__quakec_store_vector" => Self::StoreVector,
             "__quakec_load_entity" => Self::LoadEntity,
             "__quakec_load_string" => Self::LoadString,
             "__quakec_load_fn" => Self::LoadFn,
@@ -64,6 +93,15 @@ impl Intrinsic {
             "__quakec_ne_entity" => Self::NeEntity,
             "__quakec_not_string" => Self::NotString,
             "__quakec_not_entity" => Self::NotEntity,
+            "__quakec_eq_fn" => Self::EqFn,
+            "__quakec_ne_fn" => Self::NeFn,
+            "__quakec_not_fn" => Self::NotFn,
+            "__quakec_eq_vector" => Self::EqVector,
+            "__quakec_ne_vector" => Self::NeVector,
+            "__quakec_not_vector" => Self::NotVector,
+            "__quakec_dot_vector" => Self::DotVector,
+            "__quakec_func_ref" => Self::FuncRef,
+            "__quakec_field_ref_string" => Self::FieldRefString,
             "__quakec_string_literal" => Self::StringLiteral,
             _ => {
                 let (load, ty) = if let Some(t) = name.strip_prefix("__quakec_load_entity_field_") {
@@ -106,6 +144,8 @@ pub struct FuncInfo {
 /// State shared by all function lowerings.
 pub struct Ctx<'m> {
     pub module: &'m Module,
+    /// The target engine's system defs.
+    pub defs: &'static SysDefs,
     pub globals: GlobalMap,
     pub funcs: HashMap<FunctionId, FuncInfo>,
     pub wasm_globals: HashMap<GlobalId, (String, Ty)>,
@@ -117,9 +157,46 @@ pub struct Ctx<'m> {
     pub data: StaticData,
     /// Accessor functions needed for dynamic loads from static data.
     pub data_accessors: BTreeSet<DataKind>,
+    /// The imported `__table_base` global, if any.
+    pub table_base: Option<GlobalId>,
+    /// Functions in `__indirect_function_table`, by index.
+    pub table_funcs: HashMap<u64, FunctionId>,
+    /// Globals and fields declared by the module (by name, see
+    /// [`Ctx::user_name`]), with their types.
+    pub user_globals: BTreeMap<String, QcType>,
+    pub user_fields: BTreeMap<String, QcType>,
 }
 
 impl Ctx<'_> {
+    /// Read the name of a user global or field: `addr` points to a
+    /// NUL-terminated identifier in static data. Records it with type `ty`.
+    pub fn user_name(&mut self, addr: u64, ty: QcType, field: bool) -> Result<String> {
+        let what = if field { "field" } else { "global" };
+        let bytes = self
+            .data
+            .c_string(addr)
+            .with_context(|| format!("{what} name at address {addr} is not a NUL-terminated string in static data"))?;
+        let name = String::from_utf8(bytes).ok().filter(|n| is_identifier(n)).with_context(|| {
+            format!("{what} name at address {addr} is not a valid QuakeC identifier")
+        })?;
+        ensure!(
+            !self.defs.is_sys_name(&name),
+            "user {what} `{name}` has the same name as a system global or field"
+        );
+        let map = if field { &mut self.user_fields } else { &mut self.user_globals };
+        match map.get(&name) {
+            Some(&t) if t != ty => bail!(
+                "user {what} `{name}` is accessed as both {} and {}",
+                t.name(),
+                ty.name()
+            ),
+            _ => {
+                map.insert(name.clone(), ty);
+            }
+        }
+        Ok(name)
+    }
+
     /// Convert a wasm value type into a (possibly inferred) QuakeC type.
     pub fn val_ty(&mut self, t: ValType) -> Result<Ty> {
         Ok(match t {
@@ -173,28 +250,78 @@ pub struct Output {
 pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     let module = Module::from_buffer(wasm).context("failed to parse wasm module")?;
 
+    // `__memory_base` and `__table_base` are needed to find static data
+    // (and so the target) and the function table before anything else.
+    let mut memory_base = None;
+    let mut table_base = None;
+    for import in module.imports.iter() {
+        if let ImportKind::Global(g) = import.kind
+            && import.module == ENV_MODULE
+        {
+            match import.name.as_str() {
+                "__memory_base" => memory_base = Some(g),
+                "__table_base" => table_base = Some(g),
+                _ => {}
+            }
+        }
+    }
+    let mut data = StaticData::from_module(&module, memory_base)?;
+    let defs = target(&module, &mut data)?;
+
     let mut ctx = Ctx {
         module: &module,
-        globals: GlobalMap::vanilla(),
+        defs,
+        globals: defs.global_map(),
         funcs: HashMap::new(),
         wasm_globals: HashMap::new(),
         call_table: None,
         tv: TypeVars::default(),
         warnings: Vec::new(),
-        memory_base: None,
-        data: StaticData::default(),
+        memory_base,
+        data,
         data_accessors: BTreeSet::new(),
+        table_base,
+        table_funcs: HashMap::new(),
+        user_globals: BTreeMap::new(),
+        user_fields: BTreeMap::new(),
     };
 
-    // Tables: only the LLVM funcref call table is allowed.
+    // Tables: the LLVM funcref call table, and the table of Zig function
+    // pointers (only used through `__quakec_func_ref`).
+    let mut indirect_table = None;
     for table in module.tables.iter() {
+        let imported_as = |name: &str| {
+            module.imports.iter().any(|i| {
+                i.module == ENV_MODULE && i.name == name && matches!(i.kind, ImportKind::Table(t) if t == table.id())
+            })
+        };
+        if imported_as(INDIRECT_TABLE) {
+            indirect_table = Some(table.id());
+            continue;
+        }
         let is_call_table = module.exports.iter().any(|e| {
             e.name == CALL_TABLE && matches!(e.item, ExportItem::Table(t) if t == table.id())
-        }) || table.name.as_deref() == Some(CALL_TABLE);
+        }) || table.name.as_deref() == Some(CALL_TABLE)
+            || imported_as(CALL_TABLE);
         if !is_call_table {
-            bail!("unsupported table {:?}; only `{CALL_TABLE}` may be used", table.name);
+            bail!("unsupported table {:?}; only `{CALL_TABLE}` and `{INDIRECT_TABLE}` may be used", table.name);
         }
+        ensure!(ctx.call_table.is_none(), "more than one `{CALL_TABLE}`");
         ctx.call_table = Some(table.id());
+    }
+    for el in module.elements.iter() {
+        let ElementKind::Active { table, offset } = &el.kind else { continue };
+        ensure!(Some(*table) == indirect_table, "element segment for an unsupported table");
+        let base = relative_offset(offset, table_base)
+            .or_else(|| match offset {
+                ConstExpr::Value(Value::I32(k)) => usize::try_from(*k).ok(),
+                _ => None,
+            })
+            .with_context(|| format!("element segment at {offset:?} is not relative to `__table_base`"))?;
+        let ElementItems::Functions(fs) = &el.items else { bail!("unsupported element segment items") };
+        for (i, &f) in fs.iter().enumerate() {
+            ctx.table_funcs.insert(TABLE_BASE + (base + i) as u64, f);
+        }
     }
 
     // Imports.
@@ -207,10 +334,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                     .sig_of_type(ty)
                     .with_context(|| format!("in signature of import `{}`", import.name))?;
                 let kind = match import.module.as_str() {
-                    BUILTIN_MODULE => match sysdefs::builtin(&import.name) {
+                    BUILTIN_MODULE => match ctx.defs.builtin(&import.name) {
                         Some(b) => {
                             check_builtin_sig(&mut ctx.tv, b, &sig).with_context(|| {
-                                format!("in import of vanilla builtin `{}` (#{})", b.name, b.number)
+                                format!("in import of {} builtin `{}` (#{})", ctx.defs.name, b.name, b.number)
                             })?;
                             FuncKind::Builtin(Some(b.number))
                         }
@@ -237,10 +364,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                 ctx.funcs.insert(f, FuncInfo { name: import.name.clone(), sig, kind });
             }
             ImportKind::Table(_) => {}
-            // Static data is placed relative to `__memory_base`; see `data.rs`.
-            ImportKind::Global(g) if import.module == ENV_MODULE && import.name == "__memory_base" => {
-                ctx.memory_base = Some(g);
-            }
+            // Static data is placed relative to `__memory_base` (see `data.rs`),
+            // and function pointers relative to `__table_base`.
+            ImportKind::Global(_)
+                if import.module == ENV_MODULE && matches!(import.name.as_str(), "__memory_base" | "__table_base") => {}
             ImportKind::Global(_) => {
                 bail!("imported global `{}.{}` is not supported", import.module, import.name)
             }
@@ -248,11 +375,13 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         }
     }
 
-    ctx.data = StaticData::from_module(&module, ctx.memory_base)?;
-
-    // Wasm globals become QuakeC float globals.
+    // Wasm globals become QuakeC float globals. Exported ones are data
+    // symbols (like `__quakec_target`), which code doesn't use.
     for g in module.globals.iter() {
-        if let GlobalKind::Local(_) = g.kind {
+        let exported = module.exports.iter().any(|e| matches!(e.item, ExportItem::Global(x) if x == g.id()));
+        if let GlobalKind::Local(_) = g.kind
+            && !exported
+        {
             let name = format!("__wasm_g{}", ctx.wasm_globals.len());
             let ty = ctx.val_ty(g.ty).context("in wasm global")?;
             ctx.wasm_globals.insert(g.id(), (name, ty));
@@ -302,11 +431,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     let mut out = String::new();
     out.push_str("// Generated by wasm-to-qc. Do not edit.\n\n");
 
-    let sys_func_names: Vec<&str> = sysdefs::SYS_GLOBALS
-        .iter()
-        .filter(|(_, t)| *t == sysdefs::SysTy::Func)
-        .map(|(n, _)| *n)
-        .collect();
+    let sys_func_names = ctx.defs.func_names();
 
     if opts.prelude {
         let protos: HashMap<String, String> = functions
@@ -314,7 +439,22 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             .filter(|f| sys_func_names.contains(&f.name.as_str()))
             .map(|f| (f.name.clone(), f.render_proto(&mut tv)))
             .collect();
-        out.push_str(&sysdefs::prelude(|n| protos.get(n).cloned()));
+        out.push_str(&ctx.defs.prelude(|n| protos.get(n).cloned()));
+        out.push('\n');
+    }
+
+    if !ctx.user_globals.is_empty() || !ctx.user_fields.is_empty() {
+        out.push_str("// ---- user globals and fields ----\n");
+        for (name, ty) in &ctx.user_globals {
+            match ty {
+                QcType::Func => writeln!(out, "var void() {name};"),
+                ty => writeln!(out, "{} {name};", ty.name()),
+            }
+            .unwrap();
+        }
+        for (name, ty) in &ctx.user_fields {
+            let _ = writeln!(out, ".{} {name};", ty.name());
+        }
         out.push('\n');
     }
 
@@ -375,6 +515,27 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     }
 
     Ok(Output { source: out, warnings })
+}
+
+/// Find the system defs named by the exported `__quakec_target` string.
+fn target(module: &Module, data: &mut StaticData) -> Result<&'static SysDefs> {
+    let Some(export) = module.exports.iter().find(|e| e.name == TARGET_EXPORT) else {
+        return Ok(&sysdefs::VANILLA);
+    };
+    let ExportItem::Global(g) = export.item else { bail!("`{TARGET_EXPORT}` must be exported data") };
+    let GlobalKind::Local(ConstExpr::Value(Value::I32(offset))) = module.globals.get(g).kind else {
+        bail!("`{TARGET_EXPORT}` must be exported data");
+    };
+    let name = data
+        .c_string(DATA_BASE + offset as u64)
+        .and_then(|b| String::from_utf8(b).ok())
+        .with_context(|| format!("`{TARGET_EXPORT}` must be a NUL-terminated string"))?;
+    sysdefs::target(&name).with_context(|| format!("unknown `{TARGET_EXPORT}` `{name}`"))
+}
+
+pub fn is_identifier(s: &str) -> bool {
+    let mut cs = s.chars();
+    cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Make a wasm debug name usable as a QuakeC identifier.
