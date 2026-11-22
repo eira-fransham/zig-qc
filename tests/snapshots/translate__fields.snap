@@ -33,7 +33,7 @@ string get_classname(entity p0) {
 }
 
 float call_main() {
-    local float v3;
-    v3 = ((float())main)();
-    return v3;
+    local float l0;
+    l0 = ((float())main)();
+    return l0;
 }

@@ -234,6 +234,9 @@ pub enum Expr {
     /// An entity field, `ent.name`. The entity must be an `Expr::Local` or
     /// `Expr::Global`.
     Field(Box<Expr>, String),
+    /// An entity field given by a field reference value, `ent.(f)`. Both
+    /// must be an `Expr::Local` or `Expr::Global`.
+    DynField(Box<Expr>, Box<Expr>),
     /// A vector assembled from three float components. Only exists on the
     /// lowering's operand stack, so that lane-by-lane construction can be
     /// collapsed (e.g. into `v_forward`); it is always turned into another
@@ -253,7 +256,7 @@ impl Expr {
     /// must be evaluated before any intervening call or store).
     pub fn reads_globals(&self) -> bool {
         match self {
-            Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
+            Expr::Global(_) | Expr::Call(..) | Expr::Field(..) | Expr::DynField(..) => true,
             Expr::MakeVector(parts) => parts.iter().any(Expr::reads_globals),
             Expr::Float(_)
             | Expr::Null
@@ -268,23 +271,68 @@ impl Expr {
     }
 
     pub fn reads_local(&self, name: &str) -> bool {
+        let mut found = false;
+        self.visit_locals(&mut |n| found |= n == name);
+        found
+    }
+
+    /// The direct subexpressions.
+    pub fn children(&self) -> Vec<&Expr> {
         match self {
-            Expr::Local(n) => n == name,
             Expr::Float(_)
             | Expr::Null
+            | Expr::Local(_)
             | Expr::Global(_)
             | Expr::FuncName(_)
             | Expr::Vector(_)
-            | Expr::Str(_) => false,
-            Expr::Bin(_, a, b) => a.reads_local(name) || b.reads_local(name),
+            | Expr::Str(_) => vec![],
             Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) | Expr::Field(a, _) => {
-                a.reads_local(name)
+                vec![a]
             }
-            Expr::Select(a, b, c) => {
-                a.reads_local(name) || b.reads_local(name) || c.reads_local(name)
+            Expr::Bin(_, a, b) | Expr::DynField(a, b) => vec![a, b],
+            Expr::Select(a, b, c) => vec![a, b, c],
+            Expr::Call(f, args) => std::iter::once(&**f).chain(args).collect(),
+            Expr::MakeVector(parts) => parts.iter().collect(),
+        }
+    }
+
+    /// The direct subexpressions, mutably.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
+        match self {
+            Expr::Float(_)
+            | Expr::Null
+            | Expr::Local(_)
+            | Expr::Global(_)
+            | Expr::FuncName(_)
+            | Expr::Vector(_)
+            | Expr::Str(_) => vec![],
+            Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) | Expr::Field(a, _) => {
+                vec![a]
             }
-            Expr::Call(f, args) => f.reads_local(name) || args.iter().any(|a| a.reads_local(name)),
-            Expr::MakeVector(parts) => parts.iter().any(|p| p.reads_local(name)),
+            Expr::Bin(_, a, b) | Expr::DynField(a, b) => vec![a, b],
+            Expr::Select(a, b, c) => vec![a, b, c],
+            Expr::Call(f, args) => std::iter::once(&mut **f).chain(args).collect(),
+            Expr::MakeVector(parts) => parts.iter_mut().collect(),
+        }
+    }
+
+    /// Call `f` with the name of every local this expression reads.
+    pub fn visit_locals(&self, f: &mut impl FnMut(&str)) {
+        if let Expr::Local(n) = self {
+            f(n);
+        }
+        for c in self.children() {
+            c.visit_locals(f);
+        }
+    }
+
+    /// Call `f` on the name of every local in this expression.
+    pub fn visit_locals_mut(&mut self, f: &mut impl FnMut(&mut String)) {
+        if let Expr::Local(n) = self {
+            f(n);
+        }
+        for c in self.children_mut() {
+            c.visit_locals_mut(f);
         }
     }
 
@@ -352,6 +400,12 @@ impl Expr {
                 e.render(tv, out);
                 let _ = write!(out, ".{name}");
             }
+            Expr::DynField(e, f) => {
+                e.render(tv, out);
+                out.push_str(".(");
+                f.render(tv, out);
+                out.push(')');
+            }
             Expr::MakeVector(_) => unreachable!("MakeVector must be materialized before rendering"),
             Expr::Call(f, args) => {
                 f.render(tv, out);
@@ -380,6 +434,25 @@ pub enum Stmt {
 }
 
 impl Stmt {
+    /// Call `f` on the name of every local in this statement (and those
+    /// nested in it).
+    pub fn visit_locals_mut(&mut self, f: &mut impl FnMut(&mut String)) {
+        match self {
+            Stmt::Assign(l, r) => {
+                l.visit_locals_mut(f);
+                r.visit_locals_mut(f);
+            }
+            Stmt::Expr(e) | Stmt::Return(Some(e)) => e.visit_locals_mut(f),
+            Stmt::If(c, t, e) => {
+                c.visit_locals_mut(f);
+                for s in t.iter_mut().chain(e) {
+                    s.visit_locals_mut(f);
+                }
+            }
+            Stmt::Return(None) | Stmt::Goto(_) | Stmt::Label(_) | Stmt::Comment(_) => {}
+        }
+    }
+
     fn render(&self, tv: &mut TypeVars, indent: usize, out: &mut String) {
         let pad = "    ".repeat(indent);
         match self {

@@ -18,6 +18,7 @@ use crate::data::{DataKind, StaticData};
 use crate::infer::{
     self, Infer, Instance, Kind, Site, TERM_COND, args, const_val, targets, term_arg, term_ret,
 };
+use crate::alloc;
 use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
 use crate::translate::{Ctx, FuncKind, Intrinsic};
 
@@ -43,6 +44,24 @@ struct Emitter<'a, 'm> {
     block: Block,
     next_temp: usize,
     gotos: HashSet<String>,
+    /// Where each block defines and reads locals (see [`crate::alloc`]).
+    rec: HashMap<Block, Rec>,
+    /// Whether the terminator is being emitted.
+    in_term: bool,
+}
+
+/// An edge copy: destination, plain source local, locals read.
+type EdgeCopy = (String, Option<String>, Vec<String>);
+
+/// What a block does with locals, by name (see [`alloc::Block`]).
+#[derive(Default)]
+struct Rec {
+    /// `(is a definition, local)`, in program order.
+    events: Vec<(bool, String)>,
+    term_uses: Vec<String>,
+    term_defs: Vec<String>,
+    /// Each edge's copies.
+    edges: Vec<Vec<EdgeCopy>>,
 }
 
 /// Emit instance `i` of `instances` as a QuakeC function.
@@ -71,6 +90,8 @@ pub fn emit(
         block: body.entry,
         next_temp: 0,
         gotos: HashSet::new(),
+        rec: HashMap::new(),
+        in_term: false,
     };
     let f = e.function()?;
     Ok(((inst.func, i), f))
@@ -103,6 +124,7 @@ impl Emitter<'_, '_> {
 
         for (i, &b) in order.iter().enumerate() {
             self.block = b;
+            self.in_term = false;
             self.out.push(Stmt::Label(label(b)));
             for &v in &body.blocks[b].insts {
                 if const_val(body, v).is_some() || const_expr(body, v).is_some() {
@@ -113,6 +135,7 @@ impl Emitter<'_, '_> {
                 })?;
             }
             let next = order.get(i + 1).copied();
+            self.in_term = true;
             self.terminator(b, next)
                 .with_context(|| format!("at the end of {b}"))?;
             ensure!(self.pending.is_empty(), "values left unused at the end of {b}");
@@ -128,11 +151,12 @@ impl Emitter<'_, '_> {
         if matches!(body_stmts.last(), Some(Stmt::Return(None))) {
             body_stmts.pop();
         }
+        let locals = self.share_locals(&order, &params, &mut body_stmts);
         Ok(Function {
             name: self.inst.name.clone(),
             params,
             ret: sig.ret,
-            locals: std::mem::take(&mut self.locals),
+            locals,
             body: body_stmts,
         })
     }
@@ -176,7 +200,149 @@ impl Emitter<'_, '_> {
     }
 
     fn emit(&mut self, s: Stmt) {
+        self.record(&s);
         self.out.push(s);
+    }
+
+    fn emit_all(&mut self, stmts: Vec<Stmt>) {
+        for s in stmts {
+            self.emit(s);
+        }
+    }
+
+    /// Record the locals `s` reads and assigns, in the current block.
+    fn record(&mut self, s: &Stmt) {
+        let mut uses = Vec::new();
+        let mut defs = Vec::new();
+        fn walk(s: &Stmt, uses: &mut Vec<String>, defs: &mut Vec<String>) {
+            let read = |e: &Expr, uses: &mut Vec<String>| {
+                e.visit_locals(&mut |n| uses.push(n.to_string()))
+            };
+            match s {
+                Stmt::Assign(lhs, rhs) => {
+                    read(rhs, uses);
+                    match lhs {
+                        Expr::Local(n) => defs.push(n.clone()),
+                        // Component writes only go to temporaries, which
+                        // aren't shared.
+                        lhs => {
+                            for c in lhs.children() {
+                                read(c, uses);
+                            }
+                        }
+                    }
+                }
+                Stmt::Expr(e) | Stmt::Return(Some(e)) => read(e, uses),
+                Stmt::If(c, t, e) => {
+                    read(c, uses);
+                    for s in t.iter().chain(e) {
+                        walk(s, uses, defs);
+                    }
+                }
+                Stmt::Return(None) | Stmt::Goto(_) | Stmt::Label(_) | Stmt::Comment(_) => {}
+            }
+        }
+        // Outside terminators there are no `if`s, so uses come before the
+        // definition.
+        walk(s, &mut uses, &mut defs);
+        let rec = self.rec.entry(self.block).or_default();
+        if self.in_term {
+            rec.term_uses.extend(uses);
+            rec.term_defs.extend(defs);
+        } else {
+            rec.events.extend(uses.into_iter().map(|n| (false, n)));
+            rec.events.extend(defs.into_iter().map(|n| (true, n)));
+        }
+    }
+
+    /// Give values with disjoint lifetimes the same local (see
+    /// [`crate::alloc`]), renaming them in `stmts`. Returns the locals.
+    fn share_locals(
+        &mut self,
+        order: &[Block],
+        params: &[(String, Ty)],
+        stmts: &mut Vec<Stmt>,
+    ) -> Vec<(String, Ty)> {
+        // Parameters, then the values' locals. Temporaries aren't shared.
+        let mut vars = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for (n, ty) in params {
+            index.insert(n.clone(), vars.len());
+            vars.push(alloc::Var { ty: *ty, param: true });
+        }
+        let (values, temps): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.locals).into_iter().partition(|(n, _)| n.starts_with('v'));
+        for (n, ty) in &values {
+            index.insert(n.clone(), vars.len());
+            vars.push(alloc::Var { ty: *ty, param: false });
+        }
+        let pos: HashMap<Block, usize> = order.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+        let ids = |ns: &[String]| -> Vec<usize> { ns.iter().filter_map(|n| index.get(n).copied()).collect() };
+        let blocks: Vec<alloc::Block> = order
+            .iter()
+            .map(|b| {
+                let rec = self.rec.remove(b).unwrap_or_default();
+                alloc::Block {
+                    events: rec
+                        .events
+                        .iter()
+                        .filter_map(|(def, n)| {
+                            let &i = index.get(n)?;
+                            Some(if *def { alloc::Event::Def(i) } else { alloc::Event::Use(i) })
+                        })
+                        .collect(),
+                    term_uses: ids(&rec.term_uses),
+                    term_defs: ids(&rec.term_defs),
+                    edges: rec
+                        .edges
+                        .iter()
+                        .map(|edge| {
+                            edge.iter()
+                                .filter_map(|(d, plain, reads)| {
+                                    Some(alloc::Copy {
+                                        dest: *index.get(d)?,
+                                        plain: plain.as_ref().and_then(|p| index.get(p).copied()),
+                                        reads: ids(reads),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .collect(),
+                    succs: targets(&self.body.blocks[*b].terminator)
+                        .iter()
+                        .filter_map(|t| pos.get(&t.block).copied())
+                        .collect(),
+                }
+            })
+            .collect();
+        let colours = alloc::colour(&vars, &blocks);
+
+        // Name the colours: parameters keep theirs.
+        let mut names: HashMap<usize, String> = HashMap::new();
+        for (i, (n, _)) in params.iter().enumerate() {
+            names.insert(colours[i], n.clone());
+        }
+        let mut locals = Vec::new();
+        let mut rename: HashMap<String, String> = HashMap::new();
+        for (n, ty) in &values {
+            let c = colours[index[n]];
+            let new = names.entry(c).or_insert_with(|| {
+                let name = format!("l{}", locals.len());
+                locals.push((name.clone(), *ty));
+                name
+            });
+            rename.insert(n.clone(), new.clone());
+        }
+        for s in stmts.iter_mut() {
+            s.visit_locals_mut(&mut |n| {
+                if let Some(new) = rename.get(n) {
+                    *n = new.clone();
+                }
+            });
+        }
+        remove_self_copies(stmts);
+        locals.extend(temps);
+        locals
     }
 
     fn new_temp(&mut self, ty: QcType) -> String {
@@ -839,8 +1005,8 @@ impl Emitter<'_, '_> {
             Expr::Global(name) => Expr::Field(Box::new(ent), name),
             f => {
                 // A field reference value: `ent.(f)`.
-                let f = self.simple_name(f, QcType::FloatField);
-                Expr::Field(Box::new(ent), format!("({f})"))
+                let f = self.simple(f, QcType::FloatField);
+                Expr::DynField(Box::new(ent), Box::new(f))
             }
         }
     }
@@ -851,7 +1017,7 @@ impl Emitter<'_, '_> {
         match &body.blocks[b].terminator {
             Terminator::Br { target } => {
                 let copies = self.edge(b, 0, target)?;
-                self.out.extend(copies);
+                self.emit_all(copies);
                 self.jump(target.block, next);
             }
             Terminator::CondBr {
@@ -870,7 +1036,7 @@ impl Emitter<'_, '_> {
                     let mut t = t;
                     t.push(self.goto(if_true.block));
                     self.emit(Stmt::If(c, t, vec![]));
-                    self.out.extend(f);
+                    self.emit_all(f);
                     self.jump(if_false.block, next);
                 }
             }
@@ -892,7 +1058,7 @@ impl Emitter<'_, '_> {
                     self.emit(Stmt::If(cond, stmts, vec![]));
                 }
                 let copies = self.edge(b, ts.len(), default)?;
-                self.out.extend(copies);
+                self.emit_all(copies);
                 self.jump(default.block, next);
             }
             Terminator::Return { values } => match values.as_slice() {
@@ -953,8 +1119,22 @@ impl Emitter<'_, '_> {
             ensure!(pre.is_empty() || k == QcType::Vector, "unexpected statements in an edge copy");
             // Vectors are materialized into temporaries (`pre`) first.
             copies.push((dest, e, k));
-            self.out.extend(pre);
+            self.emit_all(pre);
         }
+        // Record the parallel copy (see `alloc`).
+        let group = copies
+            .iter()
+            .map(|(d, e, _)| {
+                let plain = match e {
+                    Expr::Local(x) => Some(x.clone()),
+                    _ => None,
+                };
+                let mut reads = Vec::new();
+                e.visit_locals(&mut |n| reads.push(n.to_string()));
+                (d.clone(), plain, reads)
+            })
+            .collect();
+        self.rec.entry(from).or_default().edges.push(group);
         // Sequentialize the parallel copy: a copy can go once no other
         // remaining copy reads its destination. On a cycle, one source is
         // saved in a temporary, and its destination assigned last.
@@ -1201,6 +1381,17 @@ fn const_expr(body: &FunctionBody, v: Value) -> Option<Result<Expr>> {
         }
         _ => return None,
     })
+}
+
+/// Remove `x = x` assignments (left by sharing locals).
+fn remove_self_copies(stmts: &mut Vec<Stmt>) {
+    stmts.retain(|s| !matches!(s, Stmt::Assign(Expr::Local(a), Expr::Local(b)) if a == b));
+    for s in stmts {
+        if let Stmt::If(_, t, e) = s {
+            remove_self_copies(t);
+            remove_self_copies(e);
+        }
+    }
 }
 
 fn label(b: Block) -> String {

@@ -1,6 +1,7 @@
 //! Translate WebAssembly modules produced from Zig (in a specific, known
 //! form) into QuakeC source code.
 
+pub mod alloc;
 pub mod data;
 pub mod emit;
 pub mod infer;

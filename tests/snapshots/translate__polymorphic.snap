@@ -25,18 +25,17 @@ string __wasm_id__1(string p0) {
 }
 
 string __wasm_id2(string p0) {
-    local string v2;
-    v2 = __wasm_id__1(p0);
-    return v2;
+    p0 = __wasm_id__1(p0);
+    return p0;
 }
 
 void use_id() {
-    local entity v3;
-    local string v7;
-    v3 = __wasm_id(self);
-    other = v3;
-    v7 = __wasm_id2(mapname);
-    dprint(v7);
+    local entity l0;
+    local string l1;
+    l0 = __wasm_id(self);
+    other = l0;
+    l1 = __wasm_id2(mapname);
+    dprint(l1);
 }
 
 void reused_local() {

@@ -19,25 +19,23 @@ float aim_at(entity p0, float p1);
 void fields(entity p0, string p1);
 
 entity spawn_thing(string p0) {
-    local entity v2;
-    local entity v4;
-    v2 = spawn();
-    setmodel(v2, p0);
-    v4 = nextent(v2);
-    return v4;
+    local entity l0;
+    l0 = spawn();
+    setmodel(l0, p0);
+    l0 = nextent(l0);
+    return l0;
 }
 
 float aim_at(entity p0, float p1) {
+    local vector l0;
     local vector t0;
-    local vector v5;
-    local float v9;
     t0_x = p1;
     t0_y = 2;
     t0_z = 3;
-    v5 = normalize(t0);
-    setorigin(p0, v5);
-    v9 = vlen(p0.velocity);
-    return v9;
+    l0 = normalize(t0);
+    setorigin(p0, l0);
+    p1 = vlen(p0.velocity);
+    return p1;
 }
 
 void fields(entity p0, string p1) {

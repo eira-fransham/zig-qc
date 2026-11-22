@@ -73,7 +73,7 @@ void __wasm_f44() {
 }
 
 void user_defs(entity p0) {
-    local entity v64;
+    local entity l0;
     activator = p0;
     last_dir = p0.velocity;
     p0.attack_finished = (time + 1);
@@ -95,13 +95,13 @@ b4:
 b5:
     ((void(entity, float))p0.th_pain)(activator, 5);
 b7:
-    v64 = find(world, classname, "info_player_start");
-    if (!(!(v64))) {
+    l0 = find(world, classname, "info_player_start");
+    if (!(!(l0))) {
         goto b8;
     }
     goto b10;
 b8:
-    p0.origin = v64.origin;
+    p0.origin = l0.origin;
 b10:
 }
 
@@ -114,10 +114,9 @@ void __wasm_f47(entity p0, float p1) {
 }
 
 float damage_twice(entity p0, float p1) {
-    local float v5;
     __wasm_f49(p0, p1);
-    v5 = __wasm_f49(p0, (p1 + p1));
-    return v5;
+    p1 = __wasm_f49(p0, (p1 + p1));
+    return p1;
 }
 
 float __wasm_f49(entity p0, float p1) {
@@ -154,27 +153,24 @@ b6:
 }
 
 float pick(float p0) {
-    local float v4;
-    local float v12;
     if ((p0 <= 3)) {
         goto b2;
     }
-    v4 = 0;
+    p0 = 0;
     goto b4;
 b2:
-    v12 = __wasm_data_f32((1048764 + (p0 * 4)));
-    v4 = v12;
+    p0 = __wasm_data_f32((1048764 + (p0 * 4)));
 b4:
-    return v4;
+    return p0;
 }
 
 float classify(float p0) {
-    local float v14;
+    local float l0;
     if ((p0 < 0)) {
         goto b3;
     }
     if ((p0 == 0)) {
-        v14 = 0;
+        l0 = 0;
         goto b2;
     }
     if ((p0 < 10)) {
@@ -184,55 +180,52 @@ float classify(float p0) {
 b7:
     return 1;
 b3:
-    v14 = (-1);
+    l0 = (-1);
 b2:
-    return v14;
+    return l0;
 }
 
 float sum_to(float p0) {
-    local float v3;
-    local float v7;
-    v3 = 0;
-    v7 = 0;
+    local float l0;
+    local float l1;
+    l0 = 0;
+    l1 = 0;
 b2:
-    if ((p0 > v3)) {
+    if ((p0 > l0)) {
         goto b4;
     }
-    return v7;
+    return l1;
 b4:
-    v7 = (v3 + v7);
-    v3 = (v3 + 1);
+    l1 = (l0 + l1);
+    l0 = (l0 + 1);
     goto b2;
 }
 
 entity builtins(string p0) {
-    local entity v2;
-    local string v3;
-    local vector v19;
-    local float v23;
-    local float v24;
-    local string v26;
-    local entity v39;
-    v2 = spawn();
-    v3 = precache_model(p0);
-    setmodel(v2, v3);
-    makevectors(v2.angles);
-    traceline(v2.origin, (v2.origin + v_forward), 0, v2);
-    v19 = normalize(v_forward);
-    setorigin(v2, v19);
-    v23 = vlen(v2.velocity);
-    v24 = random();
-    v26 = ftos((v23 + v24));
-    dprint(v26);
+    local entity l0;
+    local vector l1;
+    local float l2;
+    local float l3;
+    l0 = spawn();
+    p0 = precache_model(p0);
+    setmodel(l0, p0);
+    makevectors(l0.angles);
+    traceline(l0.origin, (l0.origin + v_forward), 0, l0);
+    l1 = normalize(v_forward);
+    setorigin(l0, l1);
+    l2 = vlen(l0.velocity);
+    l3 = random();
+    p0 = ftos((l2 + l3));
+    dprint(p0);
     if ((trace_fraction < 1)) {
         goto b2;
     }
     goto b4;
 b2:
-    v2.enemy = trace_ent;
+    l0.enemy = trace_ent;
 b4:
-    v39 = nextent(v2);
-    return v39;
+    l0 = nextent(l0);
+    return l0;
 }
 
 string pick_string(float p0) {
@@ -253,33 +246,29 @@ b4:
 }
 
 float comparisons(entity p0, entity p1, string p2) {
-    local float v7;
-    local float v13;
-    local float v17;
-    local float v23;
-    local float v29;
-    v7 = ((p0 == p1) ? 1 : 0);
-    v13 = ((p0 != world) ? (v7 + 2) : v7);
-    v17 = (!(p1) ? (v13 + 4) : v13);
-    v23 = ((p2 == mapname) ? (v17 + 8) : v17);
-    v29 = ((p2 != p0.classname) ? (v23 + 16) : v23);
-    return (!(p2) ? v29 : (v29 + 32));
+    local float l0;
+    l0 = ((p0 == p1) ? 1 : 0);
+    l0 = ((p0 != world) ? (l0 + 2) : l0);
+    l0 = (!(p1) ? (l0 + 4) : l0);
+    l0 = ((p2 == mapname) ? (l0 + 8) : l0);
+    l0 = ((p2 != p0.classname) ? (l0 + 16) : l0);
+    return (!(p2) ? l0 : (l0 + 32));
 }
 
 vector build_vector(entity p0, float p1, float p2) {
-    local vector v7;
+    local vector l0;
     local vector t0;
     local vector t1;
     t0_x = p1;
     t0_y = p2;
     t0_z = 0;
-    v7 = t0;
-    p0.angles = v7;
+    l0 = t0;
+    p0.angles = l0;
     t1_x = p1;
     t1_y = p1;
     t1_z = p1;
     p0.mins = t1;
-    return (v7 + p0.maxs);
+    return (l0 + p0.maxs);
 }
 
 void entity_fields(entity p0, string p1) {

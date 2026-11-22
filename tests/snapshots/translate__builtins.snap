@@ -18,18 +18,16 @@ entity spawn_with_model(string p0);
 void print_num(float p0);
 
 entity spawn_with_model(string p0) {
-    local entity v2;
-    local string v3;
-    v2 = spawn();
-    v3 = precache_model(p0);
-    setmodel(v2, v3);
-    return v2;
+    local entity l0;
+    l0 = spawn();
+    p0 = precache_model(p0);
+    setmodel(l0, p0);
+    return l0;
 }
 
 void print_num(float p0) {
-    local float v1;
-    local string v2;
-    v1 = my_engine_builtin(p0);
-    v2 = ftos(v1);
-    dprint(v2);
+    local string l0;
+    p0 = my_engine_builtin(p0);
+    l0 = ftos(p0);
+    dprint(l0);
 }

@@ -15,36 +15,32 @@ float pick(float p0);
 float classify(float p0);
 
 float sum(float p0) {
-    local float v2;
-    local float v6;
-    v2 = 0;
-    v6 = 0;
+    local float l0;
+    local float l1;
+    l0 = 0;
+    l1 = 0;
 b3:
-    if ((v2 >= p0)) {
+    if ((l0 >= p0)) {
         goto b2;
     }
-    v6 = (v6 + v2);
-    v2 = (v2 + 1);
+    l1 = (l1 + l0);
+    l0 = (l0 + 1);
     goto b3;
 b2:
-    return v6;
+    return l1;
 }
 
 float pick(float p0) {
-    local float v4;
-    local float v8;
-    local float v9;
     if ((p0 < 0)) {
         goto b2;
     }
-    v8 = sqrt(p0);
-    v9 = floor(v8);
-    v4 = v9;
+    p0 = sqrt(p0);
+    p0 = floor(p0);
     goto b4;
 b2:
-    v4 = -(p0);
+    p0 = -(p0);
 b4:
-    return v4;
+    return p0;
 }
 
 float classify(float p0) {
