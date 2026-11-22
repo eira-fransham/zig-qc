@@ -76,9 +76,11 @@ impl TypeVars {
         match self.known[root] {
             None => self.known[root] = Some(t),
             Some(k) if k == t => {}
-            Some(k) => self
-                .conflicts
-                .push(format!("{ctx}: value used as both {} and {}", k.name(), t.name())),
+            Some(k) => self.conflicts.push(format!(
+                "{ctx}: value used as both {} and {}",
+                k.name(),
+                t.name()
+            )),
         }
     }
 
@@ -86,8 +88,11 @@ impl TypeVars {
         match (a, b) {
             (Ty::Known(x), Ty::Known(y)) => {
                 if x != y {
-                    self.conflicts
-                        .push(format!("{ctx}: expected {}, found {}", x.name(), y.name()));
+                    self.conflicts.push(format!(
+                        "{ctx}: expected {}, found {}",
+                        x.name(),
+                        y.name()
+                    ));
                 }
             }
             (Ty::Var(v), Ty::Known(t)) | (Ty::Known(t), Ty::Var(v)) => {
@@ -128,7 +133,10 @@ pub struct Sig {
 impl Sig {
     /// `void()`, the type of QuakeC function globals and fields.
     pub fn void() -> Self {
-        Sig { params: vec![], ret: Ty::Known(QcType::Void) }
+        Sig {
+            params: vec![],
+            ret: Ty::Known(QcType::Void),
+        }
     }
 }
 
@@ -215,7 +223,10 @@ pub enum Expr {
 
 impl Expr {
     pub fn is_const(&self) -> bool {
-        matches!(self, Expr::Float(_) | Expr::Null | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_))
+        matches!(
+            self,
+            Expr::Float(_) | Expr::Null | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_)
+        )
     }
 
     /// Whether evaluating this expression reads mutable global state (and so
@@ -224,9 +235,12 @@ impl Expr {
         match self {
             Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
             Expr::MakeVector(parts) => parts.iter().any(Expr::reads_globals),
-            Expr::Float(_) | Expr::Null | Expr::Local(_) | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_) => {
-                false
-            }
+            Expr::Float(_)
+            | Expr::Null
+            | Expr::Local(_)
+            | Expr::FuncName(_)
+            | Expr::Vector(_)
+            | Expr::Str(_) => false,
             Expr::Bin(_, a, b) => a.reads_globals() || b.reads_globals(),
             Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) => a.reads_globals(),
             Expr::Select(a, b, c) => a.reads_globals() || b.reads_globals() || c.reads_globals(),
@@ -236,9 +250,12 @@ impl Expr {
     pub fn reads_local(&self, name: &str) -> bool {
         match self {
             Expr::Local(n) => n == name,
-            Expr::Float(_) | Expr::Null | Expr::Global(_) | Expr::FuncName(_) | Expr::Vector(_) | Expr::Str(_) => {
-                false
-            }
+            Expr::Float(_)
+            | Expr::Null
+            | Expr::Global(_)
+            | Expr::FuncName(_)
+            | Expr::Vector(_)
+            | Expr::Str(_) => false,
             Expr::Bin(_, a, b) => a.reads_local(name) || b.reads_local(name),
             Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) | Expr::Field(a, _) => {
                 a.reads_local(name)
@@ -403,7 +420,12 @@ impl Function {
             .iter()
             .map(|(n, t)| format!("{} {n}", tv.resolve(*t).name()))
             .collect();
-        format!("{} {}({})", tv.resolve(self.ret).name(), self.name, params.join(", "))
+        format!(
+            "{} {}({})",
+            tv.resolve(self.ret).name(),
+            self.name,
+            params.join(", ")
+        )
     }
 
     pub fn render(&self, tv: &mut TypeVars, out: &mut String) {

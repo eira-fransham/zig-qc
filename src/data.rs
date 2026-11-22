@@ -36,8 +36,20 @@ impl DataKind {
         Some(match kind {
             LoadKind::F32 => Self::F32,
             LoadKind::I32 { atomic: false } => Self::I32,
-            LoadKind::I32_8 { kind } => if signed(kind) { Self::S8 } else { Self::U8 },
-            LoadKind::I32_16 { kind } => if signed(kind) { Self::S16 } else { Self::U16 },
+            LoadKind::I32_8 { kind } => {
+                if signed(kind) {
+                    Self::S8
+                } else {
+                    Self::U8
+                }
+            }
+            LoadKind::I32_16 { kind } => {
+                if signed(kind) {
+                    Self::S16
+                } else {
+                    Self::U16
+                }
+            }
             _ => return None,
         })
     }
@@ -104,7 +116,10 @@ impl StaticData {
         if DATA_BASE + bytes.len() as u64 >= 1 << 24 {
             bail!("too much static data ({} bytes)", bytes.len());
         }
-        Ok(Self { bytes, strings: Vec::new() })
+        Ok(Self {
+            bytes,
+            strings: Vec::new(),
+        })
     }
 
     /// Whether `addr` falls in the static data region (or past it, which is
@@ -124,7 +139,10 @@ impl StaticData {
     /// remember that they are string data.
     pub fn string(&mut self, addr: u64, len: u64) -> Option<Vec<u8>> {
         let start = usize::try_from(addr.checked_sub(DATA_BASE)?).ok()?;
-        let bytes = self.bytes.get(start..start.checked_add(usize::try_from(len).ok()?)?)?.to_vec();
+        let bytes = self
+            .bytes
+            .get(start..start.checked_add(usize::try_from(len).ok()?)?)?
+            .to_vec();
         self.strings.push(addr..addr + len);
         Some(bytes)
     }
@@ -143,7 +161,11 @@ impl StaticData {
     /// every aligned address outside of string literals, returning 0 for
     /// anything else.
     pub fn accessor(&self, kind: DataKind) -> Function {
-        let in_string = |a: u64| self.strings.iter().any(|r| a < r.end && r.start < a + kind.size());
+        let in_string = |a: u64| {
+            self.strings
+                .iter()
+                .any(|r| a < r.end && r.start < a + kind.size())
+        };
         let entries: Vec<(f32, f32)> = (0..self.bytes.len() as u64 / kind.size())
             .map(|i| DATA_BASE + i * kind.size())
             .filter(|&a| !in_string(a))

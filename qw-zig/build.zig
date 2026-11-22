@@ -7,13 +7,7 @@ pub fn build(b: *std.Build) void {
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .cpu_model = .{
-            .explicit = &.{
-                .name = "bleeding_edge",
-                .llvm_name = "bleeding-edge",
-                .features = .{
-                    .ints = .{ 260083, 0, 0, 0, 0, 0 },
-                },
-            },
+            .explicit = &std.Target.wasm.cpu.bleeding_edge,
         },
     });
 

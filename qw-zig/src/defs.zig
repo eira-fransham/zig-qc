@@ -348,7 +348,7 @@ extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) StringRef;
 // name of a user global (see `userGlobal`).
 extern fn __quakec_load_float(ptr: *const anyopaque) f32;
 extern fn __quakec_load_vector(ptr: *const anyopaque) Vector;
-extern fn __quakec_load_entity(ptr: *const anyopaque) EntityRef;
+extern fn __quakec_load_entity(ptr: *const anyopaque) callconv(.{ .wasm_mvp = .{} }) EntityRef;
 extern fn __quakec_load_string(ptr: *const anyopaque) StringRef;
 extern fn __quakec_load_fn(ptr: *const anyopaque) Function;
 
@@ -371,14 +371,16 @@ pub fn Global(comptime T: type) type {
 
         ptr: *const anyopaque,
 
-        pub inline fn get(this: Self) Ty {
+        pub inline fn get(comptime this: Self) Ty {
             return switch (@typeInfo(T)) {
                 .int => @intFromFloat(__quakec_load_float(this.ptr)),
                 .float => @as(T, __quakec_load_float(this.ptr)),
                 .bool => __quakec_load_float(this.ptr) != 0,
                 .@"fn" => @ptrCast(__quakec_load_fn(this.ptr)),
                 else => if (T == Entity)
-                    .{ .ref = __quakec_load_entity(this.ptr) }
+                    // For some reason, trying to generate `__quakec_load_entity` as
+                    // an extern fn causes LLVM to crash.
+                    .{ .ref = @panic("`__quakec_load_entity` broken") }
                 else if (T == String)
                     .{ .ref = __quakec_load_string(this.ptr) }
                 else if (T == Vector)
@@ -388,7 +390,7 @@ pub fn Global(comptime T: type) type {
             };
         }
 
-        pub inline fn set(this: Self, value: Ty) void {
+        pub inline fn set(comptime this: Self, value: Ty) void {
             switch (@typeInfo(T)) {
                 .int => __quakec_store_float(this.ptr, @floatFromInt(value)),
                 .float => __quakec_store_float(this.ptr, value),

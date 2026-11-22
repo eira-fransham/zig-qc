@@ -32,13 +32,19 @@ enum Cmd {
         name: Option<String>,
     },
     /// Build the project in the current directory into `zig-out/lib/progs.dat`.
-    Build,
+    #[clap(arg_required_else_help = true)]
+    Build {
+        /// Extra args to pass to `FTEQCC`. You almost certainly want to pass at least `-O1`, as the WebAssembly-to-QuakeC
+        /// conversion step can create a lot of code.
+        #[clap(trailing_var_arg = true, required = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
     match Args::parse().command {
         Cmd::Init { name } => init(name),
-        Cmd::Build => build(),
+        Cmd::Build { args } => build(args),
     }
 }
 
@@ -66,13 +72,18 @@ fn init(name: Option<String>) -> Result<()> {
         ("build.zig", BUILD_ZIG.replace("@NAME@", name)),
         (
             "build.zig.zon",
-            BUILD_ZIG_ZON.replace("@NAME@", name).replace("@FINGERPRINT@", &format!("{:#018x}", fingerprint(name))),
+            BUILD_ZIG_ZON
+                .replace("@NAME@", name)
+                .replace("@FINGERPRINT@", &format!("{:#018x}", fingerprint(name))),
         ),
         ("src/defs.zig", DEFS_ZIG.to_string()),
         ("src/root.zig", ROOT_ZIG.replace("@NAME@", name)),
     ];
     for (path, _) in &files {
-        ensure!(!Path::new(path).exists(), "`{path}` already exists; not overwriting it");
+        ensure!(
+            !Path::new(path).exists(),
+            "`{path}` already exists; not overwriting it"
+        );
     }
     std::fs::create_dir_all("src").context("creating src")?;
     for (path, contents) in &files {
@@ -87,18 +98,70 @@ fn init(name: Option<String>) -> Result<()> {
 /// so it must be a bare Zig identifier.
 fn check_name(name: &str) -> Result<()> {
     const KEYWORDS: &[&str] = &[
-        "addrspace", "align", "allowzero", "and", "anyframe", "anytype", "asm", "break", "callconv", "catch",
-        "comptime", "const", "continue", "defer", "else", "enum", "errdefer", "error", "export", "extern", "fn",
-        "for", "if", "inline", "linksection", "noalias", "noinline", "nosuspend", "opaque", "or", "orelse",
-        "packed", "pub", "resume", "return", "struct", "suspend", "switch", "test", "threadlocal", "try", "union",
-        "unreachable", "var", "volatile", "while",
+        "addrspace",
+        "align",
+        "allowzero",
+        "and",
+        "anyframe",
+        "anytype",
+        "asm",
+        "break",
+        "callconv",
+        "catch",
+        "comptime",
+        "const",
+        "continue",
+        "defer",
+        "else",
+        "enum",
+        "errdefer",
+        "error",
+        "export",
+        "extern",
+        "fn",
+        "for",
+        "if",
+        "inline",
+        "linksection",
+        "noalias",
+        "noinline",
+        "nosuspend",
+        "opaque",
+        "or",
+        "orelse",
+        "packed",
+        "pub",
+        "resume",
+        "return",
+        "struct",
+        "suspend",
+        "switch",
+        "test",
+        "threadlocal",
+        "try",
+        "union",
+        "unreachable",
+        "var",
+        "volatile",
+        "while",
     ];
     let mut chars = name.chars();
-    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    ensure!(valid, "invalid project name `{name}`: it must be a Zig identifier (letters, digits and `_`, not starting with a digit)");
-    ensure!(!KEYWORDS.contains(&name), "invalid project name `{name}`: it is a Zig keyword");
-    ensure!(name.len() <= 32, "invalid project name `{name}`: it must be at most 32 characters");
+    ensure!(
+        valid,
+        "invalid project name `{name}`: it must be a Zig identifier (letters, digits and `_`, not starting with a digit)"
+    );
+    ensure!(
+        !KEYWORDS.contains(&name),
+        "invalid project name `{name}`: it is a Zig keyword"
+    );
+    ensure!(
+        name.len() <= 32,
+        "invalid project name `{name}`: it must be at most 32 characters"
+    );
     Ok(())
 }
 
@@ -126,7 +189,11 @@ fn sanitize_name(dir: &str) -> String {
 fn fingerprint(name: &str) -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
     let id = (h.finish() as u32).clamp(1, u32::MAX - 1);
     (u64::from(crc32(name.as_bytes())) << 32) | u64::from(id)
 }
@@ -137,16 +204,23 @@ fn crc32(bytes: &[u8]) -> u32 {
     for &b in bytes {
         crc ^= u32::from(b);
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
 }
 
-fn build() -> Result<()> {
+fn build(fte_extra_args: Vec<String>) -> Result<()> {
     let tools = [
         ("zig", "install it from https://ziglang.org"),
-        ("wasm-opt", "install Binaryen from https://github.com/WebAssembly/binaryen"),
+        (
+            "wasm-opt",
+            "install Binaryen from https://github.com/WebAssembly/binaryen",
+        ),
         ("fteqcc", "install it from https://www.fteqcc.org"),
     ];
     let missing: Vec<String> = tools
@@ -157,7 +231,10 @@ fn build() -> Result<()> {
     if !missing.is_empty() {
         bail!("missing tools:\n  {}", missing.join("\n  "));
     }
-    ensure!(Path::new("build.zig").exists(), "no build.zig in the current directory; run `zig-qc init <name>` first");
+    ensure!(
+        Path::new("build.zig").exists(),
+        "no build.zig in the current directory; run `zig-qc init <name>` first"
+    );
 
     let status = Command::new("zig")
         .args(["build", &format!("-Dout-name={BUILD_WASM}")])
@@ -167,14 +244,16 @@ fn build() -> Result<()> {
 
     let out_dir = Path::new(OUT_DIR);
     let wasm_path = out_dir.join(BUILD_WASM);
-    let wasm = std::fs::read(&wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
+    let wasm =
+        std::fs::read(&wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
     let out = wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default())
         .with_context(|| format!("converting {}", wasm_path.display()))?;
     for w in &out.warnings {
         eprintln!("warning: {w}");
     }
     let qc_path = out_dir.join(BUILD_QC);
-    std::fs::write(&qc_path, out.source).with_context(|| format!("writing {}", qc_path.display()))?;
+    std::fs::write(&qc_path, out.source)
+        .with_context(|| format!("writing {}", qc_path.display()))?;
 
     let src_path = out_dir.join("progs.src");
     std::fs::write(&src_path, format!("progs.dat\n{BUILD_QC}\n"))
@@ -183,7 +262,13 @@ fn build() -> Result<()> {
     if progs.exists() {
         std::fs::remove_file(&progs).with_context(|| format!("removing {}", progs.display()))?;
     }
-    let status = Command::new("fteqcc").arg("-Tid").current_dir(out_dir).status().context("running fteqcc")?;
+
+    let status = Command::new("fteqcc")
+        .arg("-Tid")
+        .args(fte_extra_args)
+        .current_dir(out_dir)
+        .status()
+        .context("running fteqcc")?;
     ensure!(status.success() && progs.exists(), "fteqcc failed");
 
     println!("wrote {}", progs.display());
@@ -193,5 +278,7 @@ fn build() -> Result<()> {
 /// Find an executable on the PATH, without running it.
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
-    std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(&file)).find(|p| p.is_file())
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(&file))
+        .find(|p| p.is_file())
 }

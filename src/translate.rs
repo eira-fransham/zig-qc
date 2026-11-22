@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 use anyhow::{Context as _, Result, bail, ensure};
 use walrus::ir::Value;
 use walrus::{
-    ConstExpr, ElementItems, ElementKind, ExportItem, FunctionId, FunctionKind, GlobalId, GlobalKind, ImportKind,
-    Module, TableId, ValType,
+    ConstExpr, ElementItems, ElementKind, ExportItem, FunctionId, FunctionKind, GlobalId,
+    GlobalKind, ImportKind, Module, TableId, ValType,
 };
 
 use crate::data::{DATA_BASE, DataKind, StaticData, relative_offset};
@@ -117,7 +117,11 @@ impl Intrinsic {
                     "fn" => QcType::Func,
                     _ => return None,
                 };
-                if load { Self::LoadField(ty) } else { Self::StoreField(ty) }
+                if load {
+                    Self::LoadField(ty)
+                } else {
+                    Self::StoreField(ty)
+                }
             }
         })
     }
@@ -172,18 +176,24 @@ impl Ctx<'_> {
     /// NUL-terminated identifier in static data. Records it with type `ty`.
     pub fn user_name(&mut self, addr: u64, ty: QcType, field: bool) -> Result<String> {
         let what = if field { "field" } else { "global" };
-        let bytes = self
-            .data
-            .c_string(addr)
-            .with_context(|| format!("{what} name at address {addr} is not a NUL-terminated string in static data"))?;
-        let name = String::from_utf8(bytes).ok().filter(|n| is_identifier(n)).with_context(|| {
-            format!("{what} name at address {addr} is not a valid QuakeC identifier")
+        let bytes = self.data.c_string(addr).with_context(|| {
+            format!("{what} name at address {addr} is not a NUL-terminated string in static data")
         })?;
+        let name = String::from_utf8(bytes)
+            .ok()
+            .filter(|n| is_identifier(n))
+            .with_context(|| {
+                format!("{what} name at address {addr} is not a valid QuakeC identifier")
+            })?;
         ensure!(
             !self.defs.is_sys_name(&name),
             "user {what} `{name}` has the same name as a system global or field"
         );
-        let map = if field { &mut self.user_fields } else { &mut self.user_globals };
+        let map = if field {
+            &mut self.user_fields
+        } else {
+            &mut self.user_globals
+        };
         match map.get(&name) {
             Some(&t) if t != ty => bail!(
                 "user {what} `{name}` is accessed as both {} and {}",
@@ -219,7 +229,10 @@ impl Ctx<'_> {
             .map(|&p| self.val_ty(p))
             .collect::<Result<Vec<_>>>()?;
         if params.len() > 8 {
-            bail!("QuakeC functions take at most 8 parameters, found {}", params.len());
+            bail!(
+                "QuakeC functions take at most 8 parameters, found {}",
+                params.len()
+            );
         }
         let ret = match t.results() {
             [] => Ty::Known(QcType::Void),
@@ -292,7 +305,9 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     for table in module.tables.iter() {
         let imported_as = |name: &str| {
             module.imports.iter().any(|i| {
-                i.module == ENV_MODULE && i.name == name && matches!(i.kind, ImportKind::Table(t) if t == table.id())
+                i.module == ENV_MODULE
+                    && i.name == name
+                    && matches!(i.kind, ImportKind::Table(t) if t == table.id())
             })
         };
         if imported_as(INDIRECT_TABLE) {
@@ -304,21 +319,33 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         }) || table.name.as_deref() == Some(CALL_TABLE)
             || imported_as(CALL_TABLE);
         if !is_call_table {
-            bail!("unsupported table {:?}; only `{CALL_TABLE}` and `{INDIRECT_TABLE}` may be used", table.name);
+            bail!(
+                "unsupported table {:?}; only `{CALL_TABLE}` and `{INDIRECT_TABLE}` may be used",
+                table.name
+            );
         }
         ensure!(ctx.call_table.is_none(), "more than one `{CALL_TABLE}`");
         ctx.call_table = Some(table.id());
     }
     for el in module.elements.iter() {
-        let ElementKind::Active { table, offset } = &el.kind else { continue };
-        ensure!(Some(*table) == indirect_table, "element segment for an unsupported table");
+        let ElementKind::Active { table, offset } = &el.kind else {
+            continue;
+        };
+        ensure!(
+            Some(*table) == indirect_table,
+            "element segment for an unsupported table"
+        );
         let base = relative_offset(offset, table_base)
             .or_else(|| match offset {
                 ConstExpr::Value(Value::I32(k)) => usize::try_from(*k).ok(),
                 _ => None,
             })
-            .with_context(|| format!("element segment at {offset:?} is not relative to `__table_base`"))?;
-        let ElementItems::Functions(fs) = &el.items else { bail!("unsupported element segment items") };
+            .with_context(|| {
+                format!("element segment at {offset:?} is not relative to `__table_base`")
+            })?;
+        let ElementItems::Functions(fs) = &el.items else {
+            bail!("unsupported element segment items")
+        };
         for (i, &f) in fs.iter().enumerate() {
             ctx.table_funcs.insert(TABLE_BASE + (base + i) as u64, f);
         }
@@ -337,7 +364,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                     BUILTIN_MODULE => match ctx.defs.builtin(&import.name) {
                         Some(b) => {
                             check_builtin_sig(&mut ctx.tv, b, &sig).with_context(|| {
-                                format!("in import of {} builtin `{}` (#{})", ctx.defs.name, b.name, b.number)
+                                format!(
+                                    "in import of {} builtin `{}` (#{})",
+                                    ctx.defs.name, b.name, b.number
+                                )
                             })?;
                             FuncKind::Builtin(Some(b.number))
                         }
@@ -361,15 +391,27 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                         import.name
                     ),
                 };
-                ctx.funcs.insert(f, FuncInfo { name: import.name.clone(), sig, kind });
+                ctx.funcs.insert(
+                    f,
+                    FuncInfo {
+                        name: import.name.clone(),
+                        sig,
+                        kind,
+                    },
+                );
             }
             ImportKind::Table(_) => {}
             // Static data is placed relative to `__memory_base` (see `data.rs`),
             // and function pointers relative to `__table_base`.
             ImportKind::Global(_)
-                if import.module == ENV_MODULE && matches!(import.name.as_str(), "__memory_base" | "__table_base") => {}
+                if import.module == ENV_MODULE
+                    && matches!(import.name.as_str(), "__memory_base" | "__table_base") => {}
             ImportKind::Global(_) => {
-                bail!("imported global `{}.{}` is not supported", import.module, import.name)
+                bail!(
+                    "imported global `{}.{}` is not supported",
+                    import.module,
+                    import.name
+                )
             }
             ImportKind::Tag(_) => bail!("imported tag `{}` is not supported", import.name),
         }
@@ -378,7 +420,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     // Wasm globals become QuakeC float globals. Exported ones are data
     // symbols (like `__quakec_target`), which code doesn't use.
     for g in module.globals.iter() {
-        let exported = module.exports.iter().any(|e| matches!(e.item, ExportItem::Global(x) if x == g.id()));
+        let exported = module
+            .exports
+            .iter()
+            .any(|e| matches!(e.item, ExportItem::Global(x) if x == g.id()));
         if let GlobalKind::Local(_) = g.kind
             && !exported
         {
@@ -408,7 +453,14 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             let sig = ctx
                 .sig_of_type(f.ty())
                 .with_context(|| format!("in signature of function `{name}`"))?;
-            ctx.funcs.insert(f.id(), FuncInfo { name, sig, kind: FuncKind::Local });
+            ctx.funcs.insert(
+                f.id(),
+                FuncInfo {
+                    name,
+                    sig,
+                    kind: FuncKind::Local,
+                },
+            );
             local_ids.push(f.id());
         }
     }
@@ -416,7 +468,9 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     // Lower all functions.
     let mut functions = Vec::new();
     for &id in &local_ids {
-        let FunctionKind::Local(lf) = &module.funcs.get(id).kind else { unreachable!() };
+        let FunctionKind::Local(lf) = &module.funcs.get(id).kind else {
+            unreachable!()
+        };
         let name = ctx.funcs[&id].name.clone();
         let f = lower::lower_function(&mut ctx, id, lf)
             .with_context(|| format!("while translating function `{name}`"))?;
@@ -514,7 +568,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         out.push('\n');
     }
 
-    Ok(Output { source: out, warnings })
+    Ok(Output {
+        source: out,
+        warnings,
+    })
 }
 
 /// Find the system defs named by the exported `__quakec_target` string.
@@ -522,7 +579,9 @@ fn target(module: &Module, data: &mut StaticData) -> Result<&'static SysDefs> {
     let Some(export) = module.exports.iter().find(|e| e.name == TARGET_EXPORT) else {
         return Ok(&sysdefs::VANILLA);
     };
-    let ExportItem::Global(g) = export.item else { bail!("`{TARGET_EXPORT}` must be exported data") };
+    let ExportItem::Global(g) = export.item else {
+        bail!("`{TARGET_EXPORT}` must be exported data")
+    };
     let GlobalKind::Local(ConstExpr::Value(Value::I32(offset))) = module.globals.get(g).kind else {
         bail!("`{TARGET_EXPORT}` must be exported data");
     };
@@ -535,12 +594,16 @@ fn target(module: &Module, data: &mut StaticData) -> Result<&'static SysDefs> {
 
 pub fn is_identifier(s: &str) -> bool {
     let mut cs = s.chars();
-    cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    cs.next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Make a wasm debug name usable as a QuakeC identifier.
 fn sanitize(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
 /// Check an imported builtin's wasm signature against its vanilla QuakeC
@@ -555,7 +618,11 @@ fn check_builtin_sig(tv: &mut TypeVars, b: &sysdefs::Builtin, sig: &Sig) -> Resu
     }
     let slots = sig.params.iter().zip(b.params).map(|(&w, &q)| (w, q));
     for (i, (wasm, qc)) in slots.chain(std::iter::once((sig.ret, b.ret))).enumerate() {
-        let what = if i < b.params.len() { format!("parameter {i}") } else { "return type".into() };
+        let what = if i < b.params.len() {
+            format!("parameter {i}")
+        } else {
+            "return type".into()
+        };
         let ok = match (wasm, qc) {
             (Ty::Known(w), q) => w == q,
             // An externref: entity, string or field.

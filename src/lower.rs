@@ -9,7 +9,9 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
-use walrus::ir::{self, BinaryOp, Instr, InstrSeqId, InstrSeqType, LoadKind, StoreKind, UnaryOp, Value};
+use walrus::ir::{
+    self, BinaryOp, Instr, InstrSeqId, InstrSeqType, LoadKind, StoreKind, UnaryOp, Value,
+};
 use walrus::{FunctionId, LocalFunction, LocalId};
 
 use crate::data::{DATA_BASE, DataKind, StaticData};
@@ -76,7 +78,10 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         params.push((n, ty));
     }
 
-    let bases = [(ctx.memory_base, DATA_BASE as f32), (ctx.table_base, TABLE_BASE as f32)];
+    let bases = [
+        (ctx.memory_base, DATA_BASE as f32),
+        (ctx.table_base, TABLE_BASE as f32),
+    ];
     let base_locals = base_locals(func, &bases, &locals);
     let mut l = Lower {
         ctx,
@@ -98,7 +103,12 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
     };
 
     let entry = func.entry_block();
-    l.labels.push(Label { name: String::new(), kind: LabelKind::Return, result: None, used: false });
+    l.labels.push(Label {
+        name: String::new(),
+        kind: LabelKind::Return,
+        result: None,
+        used: false,
+    });
     l.label_of.insert(entry, 0);
     let live = l.lower_seq(entry)?;
     if live && l.ret != Ty::Known(QcType::Void) {
@@ -126,7 +136,13 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
 
     let mut all_locals = l.local_decls;
     all_locals.extend(l.temps);
-    Ok(Function { name, params, ret: sig.ret, locals: all_locals, body: l.out })
+    Ok(Function {
+        name,
+        params,
+        ret: sig.ret,
+        locals: all_locals,
+        body: l.out,
+    })
 }
 
 impl Lower<'_, '_> {
@@ -147,13 +163,18 @@ impl Lower<'_, '_> {
 
     /// Pop a value without materializing it (for lane operations).
     fn pop_raw(&mut self) -> Result<(Expr, Ty)> {
-        self.stack.pop().ok_or_else(|| anyhow!("wasm operand stack underflow"))
+        self.stack
+            .pop()
+            .ok_or_else(|| anyhow!("wasm operand stack underflow"))
     }
 
     fn pop_n(&mut self, n: usize) -> Result<Vec<(Expr, Ty)>> {
         ensure!(self.stack.len() >= n, "wasm operand stack underflow");
         let vals = self.stack.split_off(self.stack.len() - n);
-        Ok(vals.into_iter().map(|(e, t)| (self.materialize(e), t)).collect())
+        Ok(vals
+            .into_iter()
+            .map(|(e, t)| (self.materialize(e), t))
+            .collect())
     }
 
     /// Materialize the value on top of the stack in place.
@@ -178,7 +199,10 @@ impl Lower<'_, '_> {
         }
         let tmp = self.new_temp(Ty::Known(QcType::Vector));
         for (i, p) in parts.into_iter().enumerate() {
-            self.emit(Stmt::Assign(Expr::Component(Box::new(Expr::Local(tmp.clone())), i as u8), p));
+            self.emit(Stmt::Assign(
+                Expr::Component(Box::new(Expr::Local(tmp.clone())), i as u8),
+                p,
+            ));
         }
         Expr::Local(tmp)
     }
@@ -205,11 +229,17 @@ impl Lower<'_, '_> {
         while let Some(seq) = todo.pop() {
             for (instr, _) in &self.func.block(seq).instrs {
                 match instr {
-                    Instr::LocalSet(ir::LocalSet { local }) | Instr::LocalTee(ir::LocalTee { local }) => {
+                    Instr::LocalSet(ir::LocalSet { local })
+                    | Instr::LocalTee(ir::LocalTee { local }) => {
                         self.known.remove(local);
                     }
-                    Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => todo.push(*seq),
-                    Instr::IfElse(ir::IfElse { consequent, alternative }) => todo.extend([*consequent, *alternative]),
+                    Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => {
+                        todo.push(*seq)
+                    }
+                    Instr::IfElse(ir::IfElse {
+                        consequent,
+                        alternative,
+                    }) => todo.extend([*consequent, *alternative]),
                     _ => {}
                 }
             }
@@ -298,11 +328,12 @@ impl Lower<'_, '_> {
                 None => bail!("memory address {addr} is not a vector QuakeC global"),
             };
         }
-        let slot = self
-            .ctx
-            .globals
-            .by_addr(addr as u64)
-            .ok_or_else(|| anyhow!("memory address {addr} (slot {}) is not a known QuakeC global", addr / 4))?;
+        let slot = self.ctx.globals.by_addr(addr as u64).ok_or_else(|| {
+            anyhow!(
+                "memory address {addr} (slot {}) is not a known QuakeC global",
+                addr / 4
+            )
+        })?;
         ensure!(
             slot.ty == expect,
             "memory address {addr} is `{}` of type {}, but was accessed as {}",
@@ -389,14 +420,22 @@ impl Lower<'_, '_> {
                 if self.ret == Ty::Known(QcType::Void) {
                     stmts.push(Stmt::Return(None));
                 } else {
-                    let (v, t) = self.stack.last().cloned().ok_or_else(|| anyhow!("stack underflow"))?;
+                    let (v, t) = self
+                        .stack
+                        .last()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("stack underflow"))?;
                     self.unify(self.ret, t, "return value");
                     stmts.push(Stmt::Return(Some(v)));
                 }
             }
             LabelKind::End => {
                 if let Some((tmp, ty)) = self.labels[idx].result.clone() {
-                    let (v, t) = self.stack.last().cloned().ok_or_else(|| anyhow!("stack underflow"))?;
+                    let (v, t) = self
+                        .stack
+                        .last()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("stack underflow"))?;
                     self.unify(ty, t, "block result");
                     stmts.push(Stmt::Assign(Expr::Local(tmp), v));
                 }
@@ -412,7 +451,10 @@ impl Lower<'_, '_> {
     fn lower_seq(&mut self, seq: InstrSeqId) -> Result<bool> {
         let func = self.func;
         for (instr, _) in &func.block(seq).instrs {
-            if !self.lower_instr(instr).with_context(|| format!("at instruction {instr:?}"))? {
+            if !self
+                .lower_instr(instr)
+                .with_context(|| format!("at instruction {instr:?}"))?
+            {
                 return Ok(false);
             }
         }
@@ -430,7 +472,12 @@ impl Lower<'_, '_> {
     }
 
     /// At the fallthrough end of a block: move its result into the result temp.
-    fn finish_block(&mut self, height: usize, live: bool, result: &Option<(String, Ty)>) -> Result<()> {
+    fn finish_block(
+        &mut self,
+        height: usize,
+        live: bool,
+        result: &Option<(String, Ty)>,
+    ) -> Result<()> {
         if live && let Some((tmp, ty)) = result {
             let (v, t) = self.pop()?;
             self.unify(*ty, t, "block result");
@@ -449,7 +496,12 @@ impl Lower<'_, '_> {
                 let result = self.block_result(*seq)?;
                 let name = self.new_label("blk");
                 let idx = self.labels.len();
-                self.labels.push(Label { name: name.clone(), kind: LabelKind::End, result: result.clone(), used: false });
+                self.labels.push(Label {
+                    name: name.clone(),
+                    kind: LabelKind::End,
+                    result: result.clone(),
+                    used: false,
+                });
                 self.label_of.insert(*seq, idx);
                 let height = self.stack.len();
                 let (body, live) = self.lower_nested(*seq)?;
@@ -468,7 +520,12 @@ impl Lower<'_, '_> {
                 self.spill_all();
                 let name = self.new_label("loop");
                 let idx = self.labels.len();
-                self.labels.push(Label { name: name.clone(), kind: LabelKind::Loop, result: None, used: false });
+                self.labels.push(Label {
+                    name: name.clone(),
+                    kind: LabelKind::Loop,
+                    result: None,
+                    used: false,
+                });
                 self.label_of.insert(*seq, idx);
                 let height = self.stack.len();
                 // The back edge may bring other values.
@@ -480,17 +537,31 @@ impl Lower<'_, '_> {
                 }
                 self.out.extend(body);
                 // A loop's result (if any) is left on the stack by its body.
-                let extra = if live && !matches!(self.func.block(*seq).ty, InstrSeqType::Simple(None)) { 1 } else { 0 };
-                self.stack.truncate(height + extra.min(self.stack.len() - height));
+                let extra =
+                    if live && !matches!(self.func.block(*seq).ty, InstrSeqType::Simple(None)) {
+                        1
+                    } else {
+                        0
+                    };
+                self.stack
+                    .truncate(height + extra.min(self.stack.len() - height));
                 Ok(live)
             }
-            Instr::IfElse(ir::IfElse { consequent, alternative }) => {
+            Instr::IfElse(ir::IfElse {
+                consequent,
+                alternative,
+            }) => {
                 let (cond, _) = self.pop()?;
                 self.spill_all();
                 let result = self.block_result(*consequent)?;
                 let name = self.new_label("endif");
                 let idx = self.labels.len();
-                self.labels.push(Label { name: name.clone(), kind: LabelKind::End, result: result.clone(), used: false });
+                self.labels.push(Label {
+                    name: name.clone(),
+                    kind: LabelKind::End,
+                    result: result.clone(),
+                    used: false,
+                });
                 self.label_of.insert(*consequent, idx);
                 self.label_of.insert(*alternative, idx);
                 let height = self.stack.len();
@@ -553,7 +624,11 @@ impl Lower<'_, '_> {
                 };
                 for (i, b) in blocks.iter().enumerate() {
                     let stmts = self.branch(*b)?;
-                    let cond = Expr::Bin(BinOp::Eq, Box::new(idx.clone()), Box::new(Expr::Float(i as f32)));
+                    let cond = Expr::Bin(
+                        BinOp::Eq,
+                        Box::new(idx.clone()),
+                        Box::new(Expr::Float(i as f32)),
+                    );
                     self.emit(Stmt::If(cond, stmts, vec![]));
                 }
                 let stmts = self.branch(*default)?;
@@ -597,18 +672,24 @@ impl Lower<'_, '_> {
                 let (b, tb) = self.pop()?;
                 let (a, ta) = self.pop()?;
                 self.unify(ta, tb, "select operands");
-                self.stack.push((Expr::Select(Box::new(c), Box::new(a), Box::new(b)), ta));
+                self.stack
+                    .push((Expr::Select(Box::new(c), Box::new(a), Box::new(b)), ta));
                 Ok(true)
             }
             Instr::LocalGet(ir::LocalGet { local }) if self.base_locals.contains_key(local) => {
-                self.stack.push((Expr::Float(self.base_locals[local]), Ty::Known(QcType::Float)));
+                self.stack.push((
+                    Expr::Float(self.base_locals[local]),
+                    Ty::Known(QcType::Float),
+                ));
                 Ok(true)
             }
             Instr::LocalSet(ir::LocalSet { local }) if self.base_locals.contains_key(local) => {
                 self.pop()?;
                 Ok(true)
             }
-            Instr::LocalTee(ir::LocalTee { local }) if self.base_locals.contains_key(local) => Ok(true),
+            Instr::LocalTee(ir::LocalTee { local }) if self.base_locals.contains_key(local) => {
+                Ok(true)
+            }
             Instr::LocalGet(ir::LocalGet { local }) if self.known.contains_key(local) => {
                 let (_, t) = self.local(*local)?;
                 self.stack.push((Expr::Float(self.known[local]), t));
@@ -636,21 +717,33 @@ impl Lower<'_, '_> {
                 Ok(true)
             }
             Instr::GlobalGet(ir::GlobalGet { global }) if Some(*global) == self.ctx.memory_base => {
-                self.stack.push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
+                self.stack
+                    .push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
                 Ok(true)
             }
             Instr::GlobalGet(ir::GlobalGet { global }) if Some(*global) == self.ctx.table_base => {
-                self.stack.push((Expr::Float(TABLE_BASE as f32), Ty::Known(QcType::Float)));
+                self.stack
+                    .push((Expr::Float(TABLE_BASE as f32), Ty::Known(QcType::Float)));
                 Ok(true)
             }
             Instr::GlobalGet(ir::GlobalGet { global }) => {
-                let (n, t) = self.ctx.wasm_globals.get(global).cloned().ok_or_else(|| anyhow!("unknown global"))?;
+                let (n, t) = self
+                    .ctx
+                    .wasm_globals
+                    .get(global)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("unknown global"))?;
                 self.stack.push((Expr::Global(n), t));
                 Ok(true)
             }
             Instr::GlobalSet(ir::GlobalSet { global }) => {
                 let (v, t) = self.pop()?;
-                let (n, gt) = self.ctx.wasm_globals.get(global).cloned().ok_or_else(|| anyhow!("unknown global"))?;
+                let (n, gt) = self
+                    .ctx
+                    .wasm_globals
+                    .get(global)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("unknown global"))?;
                 self.unify(gt, t, "global assignment");
                 self.spill_globals();
                 self.emit(Stmt::Assign(Expr::Global(n), v));
@@ -673,8 +766,12 @@ impl Lower<'_, '_> {
                     Value::V128(bits) => {
                         let lane = |i: u32| f32::from_bits((bits >> (32 * i)) as u32);
                         let v = [lane(0), lane(1), lane(2)];
-                        ensure!(v.iter().all(|f| f.is_finite()), "non-finite vector constant {v:?}");
-                        self.stack.push((Expr::Vector(v), Ty::Known(QcType::Vector)));
+                        ensure!(
+                            v.iter().all(|f| f.is_finite()),
+                            "non-finite vector constant {v:?}"
+                        );
+                        self.stack
+                            .push((Expr::Vector(v), Ty::Known(QcType::Vector)));
                         return Ok(true);
                     }
                     other => bail!("unsupported constant {other:?}"),
@@ -682,14 +779,18 @@ impl Lower<'_, '_> {
                 self.stack.push((Expr::Float(f), Ty::Known(QcType::Float)));
                 Ok(true)
             }
-            Instr::Binop(ir::Binop { op: BinaryOp::F32x4ReplaceLane { idx } }) => {
+            Instr::Binop(ir::Binop {
+                op: BinaryOp::F32x4ReplaceLane { idx },
+            }) => {
                 let (x, _) = self.pop()?;
                 let (v, _) = self.pop_raw()?;
                 let e = self.replace_lane(v, *idx, x);
                 self.stack.push((e, Ty::Known(QcType::Vector)));
                 Ok(true)
             }
-            Instr::Unop(ir::Unop { op: UnaryOp::F32x4ExtractLane { idx } }) => {
+            Instr::Unop(ir::Unop {
+                op: UnaryOp::F32x4ExtractLane { idx },
+            }) => {
                 let (v, _) = self.pop_raw()?;
                 let e = self.extract_lane(v, *idx);
                 self.stack.push((e, Ty::Known(QcType::Float)));
@@ -700,12 +801,21 @@ impl Lower<'_, '_> {
                 match kind {
                     K::V128Load32Zero | K::V128Load64Zero => {
                         let (addr, _) = self.pop()?;
-                        let n = if matches!(kind, K::V128Load32Zero) { 1 } else { 2 };
+                        let n = if matches!(kind, K::V128Load32Zero) {
+                            1
+                        } else {
+                            2
+                        };
                         let mut parts = [Expr::Float(0.0), Expr::Float(0.0), Expr::Float(0.0)];
                         for (i, p) in parts.iter_mut().enumerate().take(n) {
-                            *p = Expr::Global(self.global_at(&addr, arg.offset + 4 * i as u64, QcType::Float)?);
+                            *p = Expr::Global(self.global_at(
+                                &addr,
+                                arg.offset + 4 * i as u64,
+                                QcType::Float,
+                            )?);
                         }
-                        self.stack.push((Expr::MakeVector(Box::new(parts)), Ty::Known(QcType::Vector)));
+                        self.stack
+                            .push((Expr::MakeVector(Box::new(parts)), Ty::Known(QcType::Vector)));
                     }
                     K::V128Load32Lane(lane) => {
                         let (v, _) = self.pop_raw()?;
@@ -726,7 +836,9 @@ impl Lower<'_, '_> {
                 }
                 Ok(true)
             }
-            Instr::Binop(ir::Binop { op: op @ (BinaryOp::F32x4Mul | BinaryOp::F32x4Div) }) => {
+            Instr::Binop(ir::Binop {
+                op: op @ (BinaryOp::F32x4Mul | BinaryOp::F32x4Div),
+            }) => {
                 let (b, _) = self.pop_raw()?;
                 let (a, _) = self.pop_raw()?;
                 let e = self.vector_mul_div(matches!(op, BinaryOp::F32x4Div), a, b);
@@ -737,8 +849,14 @@ impl Lower<'_, '_> {
                 let (b, _) = self.pop()?;
                 let (a, _) = self.pop()?;
                 let (e, t) = match *op {
-                    BinaryOp::F32x4Add => (Expr::Bin(BinOp::Add, Box::new(a), Box::new(b)), QcType::Vector),
-                    BinaryOp::F32x4Sub => (Expr::Bin(BinOp::Sub, Box::new(a), Box::new(b)), QcType::Vector),
+                    BinaryOp::F32x4Add => (
+                        Expr::Bin(BinOp::Add, Box::new(a), Box::new(b)),
+                        QcType::Vector,
+                    ),
+                    BinaryOp::F32x4Sub => (
+                        Expr::Bin(BinOp::Sub, Box::new(a), Box::new(b)),
+                        QcType::Vector,
+                    ),
                     op => (lower_binop(op, a, b)?, QcType::Float),
                 };
                 self.stack.push((e, Ty::Known(t)));
@@ -750,7 +868,10 @@ impl Lower<'_, '_> {
                     // Float → int truncation. `OP_BITOR` converts both operands
                     // to int (truncating toward zero) and back. `x | 0` would
                     // be folded away by fteqcc, but `x | x` is kept.
-                    UnaryOp::I32TruncSF32 | UnaryOp::I32TruncUF32 | UnaryOp::I32TruncSSatF32 | UnaryOp::I32TruncUSatF32 => {
+                    UnaryOp::I32TruncSF32
+                    | UnaryOp::I32TruncUF32
+                    | UnaryOp::I32TruncSSatF32
+                    | UnaryOp::I32TruncUSatF32 => {
                         let e = match a {
                             Expr::Float(f) => Expr::Float(f.trunc()),
                             a => {
@@ -776,7 +897,10 @@ impl Lower<'_, '_> {
                 Ok(true)
             }
             Instr::TableSet(ir::TableSet { table }) => {
-                ensure!(Some(*table) == self.ctx.call_table, "table.set on unsupported table");
+                ensure!(
+                    Some(*table) == self.ctx.call_table,
+                    "table.set on unsupported table"
+                );
                 let (v, t) = self.pop()?;
                 let (idx, _) = self.pop()?;
                 let idx = Self::const_i32(&idx, "table.set index")?;
@@ -794,11 +918,17 @@ impl Lower<'_, '_> {
             }
             Instr::RefIsNull(_) => {
                 let (v, _) = self.pop()?;
-                self.stack.push((Expr::Un(UnOp::Not, Box::new(v)), Ty::Known(QcType::Float)));
+                self.stack
+                    .push((Expr::Un(UnOp::Not, Box::new(v)), Ty::Known(QcType::Float)));
                 Ok(true)
             }
             Instr::RefFunc(ir::RefFunc { func }) => {
-                let name = self.ctx.funcs.get(func).map(|f| f.name.clone()).ok_or_else(|| anyhow!("unknown function"))?;
+                let name = self
+                    .ctx
+                    .funcs
+                    .get(func)
+                    .map(|f| f.name.clone())
+                    .ok_or_else(|| anyhow!("unknown function"))?;
                 let f = self.func_value(name);
                 self.stack.push((f, Ty::Known(QcType::Func)));
                 Ok(true)
@@ -857,14 +987,17 @@ impl Lower<'_, '_> {
             if !StaticData::is_data_addr(a) {
                 return Ok(false);
             }
-            let dk = DataKind::from_load(kind).ok_or_else(|| anyhow!("unsupported load {kind:?} from static data"))?;
+            let dk = DataKind::from_load(kind)
+                .ok_or_else(|| anyhow!("unsupported load {kind:?} from static data"))?;
             let v = self
                 .ctx
                 .data
                 .read(a, dk)
                 .ok_or_else(|| anyhow!("load from address {a}, outside of static data"))?;
             if v.fract() == 0.0 && v.abs() > MAX_EXACT_INT as f32 && dk != DataKind::F32 {
-                self.ctx.warnings.push(format!("static data value {v} is not exactly representable as a QuakeC float"));
+                self.ctx.warnings.push(format!(
+                    "static data value {v} is not exactly representable as a QuakeC float"
+                ));
             }
             self.stack.push((Expr::Float(v), Ty::Known(QcType::Float)));
             return Ok(true);
@@ -874,10 +1007,21 @@ impl Lower<'_, '_> {
         let dk = DataKind::from_load(kind)
             .ok_or_else(|| anyhow!("unsupported load {kind:?} from a non-constant address"))?;
         self.ctx.data_accessors.insert(dk);
-        let addr = if offset == 0 { addr.clone() } else { fold(BinOp::Add, addr.clone(), Expr::Float(offset as f32)) };
+        let addr = if offset == 0 {
+            addr.clone()
+        } else {
+            fold(BinOp::Add, addr.clone(), Expr::Float(offset as f32))
+        };
         self.stack.push((addr, Ty::Known(QcType::Float)));
-        let sig = Sig { params: vec![Ty::Known(QcType::Float)], ret: Ty::Known(QcType::Float) };
-        self.call(Expr::FuncName(dk.accessor_name().into()), &sig, dk.accessor_name())?;
+        let sig = Sig {
+            params: vec![Ty::Known(QcType::Float)],
+            ret: Ty::Known(QcType::Float),
+        };
+        self.call(
+            Expr::FuncName(dk.accessor_name().into()),
+            &sig,
+            dk.accessor_name(),
+        )?;
         Ok(true)
     }
 
@@ -901,10 +1045,19 @@ impl Lower<'_, '_> {
             f => f,
         };
         let own = match &f {
-            Expr::FuncName(n) => self.ctx.funcs.values().find(|i| i.name == *n).map(|i| i.sig.clone()),
+            Expr::FuncName(n) => self
+                .ctx
+                .funcs
+                .values()
+                .find(|i| i.name == *n)
+                .map(|i| i.sig.clone()),
             _ => Some(Sig::void()),
         };
-        if own.as_ref() == Some(sig) { f } else { Expr::FnCast(sig.clone(), Box::new(f)) }
+        if own.as_ref() == Some(sig) {
+            f
+        } else {
+            Expr::FnCast(sig.clone(), Box::new(f))
+        }
     }
 
     /// A function value, which always has type `void()` (see [`Self::fn_cast`]).
@@ -918,30 +1071,38 @@ impl Lower<'_, '_> {
     fn func_ref(&self, ptr: &Expr) -> Result<Expr> {
         match ptr {
             Expr::Float(i) => {
-                let f = self
+                let f = self.ctx.table_funcs.get(&(*i as u64)).with_context(|| {
+                    format!("function pointer {i} is not in `__indirect_function_table`")
+                })?;
+                let name = self
                     .ctx
-                    .table_funcs
-                    .get(&(*i as u64))
-                    .with_context(|| format!("function pointer {i} is not in `__indirect_function_table`"))?;
-                let name = self.ctx.funcs.get(f).map(|f| f.name.clone()).context("unknown function")?;
+                    .funcs
+                    .get(f)
+                    .map(|f| f.name.clone())
+                    .context("unknown function")?;
                 Ok(self.func_value(name))
             }
-            Expr::Select(c, a, b) => {
-                Ok(Expr::Select(c.clone(), Box::new(self.func_ref(a)?), Box::new(self.func_ref(b)?)))
-            }
-            other => bail!("function pointer passed to `__quakec_func_ref` is not a constant: `{other:?}`"),
+            Expr::Select(c, a, b) => Ok(Expr::Select(
+                c.clone(),
+                Box::new(self.func_ref(a)?),
+                Box::new(self.func_ref(b)?),
+            )),
+            other => bail!(
+                "function pointer passed to `__quakec_func_ref` is not a constant: `{other:?}`"
+            ),
         }
     }
 
     fn lower_call_indirect(&mut self, ty: walrus::TypeId, table: walrus::TableId) -> Result<()> {
-        ensure!(Some(table) == self.ctx.call_table, "call_indirect on unsupported table");
+        ensure!(
+            Some(table) == self.ctx.call_table,
+            "call_indirect on unsupported table"
+        );
         let (idx, _) = self.pop()?;
         let idx = Self::const_i32(&idx, "call_indirect table index")?;
-        let (f, _) = self
-            .table_slots
-            .get(&idx)
-            .cloned()
-            .ok_or_else(|| anyhow!("call_indirect through call table slot {idx}, which was not set"))?;
+        let (f, _) = self.table_slots.get(&idx).cloned().ok_or_else(|| {
+            anyhow!("call_indirect through call table slot {idx}, which was not set")
+        })?;
         let sig = self.ctx.sig_of_type(ty)?;
         let callee = self.fn_cast(&sig, f);
         self.call(callee, &sig, "indirect call")
@@ -969,7 +1130,9 @@ impl Lower<'_, '_> {
                 let [x, y, z] = *parts;
                 [x, y, z].into_iter().nth(i as usize).unwrap()
             }
-            (Expr::Field(e, name), i) => Expr::Field(e, format!("{name}_{}", ["x", "y", "z"][i as usize])),
+            (Expr::Field(e, name), i) => {
+                Expr::Field(e, format!("{name}_{}", ["x", "y", "z"][i as usize]))
+            }
             (v, i) => Expr::Component(Box::new(self.simple(v, Ty::Known(QcType::Vector))), i),
         }
     }
@@ -1002,7 +1165,11 @@ impl Lower<'_, '_> {
         };
         if let Some(f) = splat_of(&b) {
             let a = self.materialize(a);
-            let f = if div { fold(BinOp::Div, Expr::Float(1.0), f) } else { f };
+            let f = if div {
+                fold(BinOp::Div, Expr::Float(1.0), f)
+            } else {
+                f
+            };
             return Expr::Bin(BinOp::Mul, Box::new(a), Box::new(f));
         }
         if !div && let Some(f) = splat_of(&a) {
@@ -1023,7 +1190,11 @@ impl Lower<'_, '_> {
         let op = if div { BinOp::Div } else { BinOp::Mul };
         let [a0, a1, a2] = a;
         let [b0, b1, b2] = b;
-        Expr::MakeVector(Box::new([fold(op, a0, b0), fold(op, a1, b1), fold(op, a2, b2)]))
+        Expr::MakeVector(Box::new([
+            fold(op, a0, b0),
+            fold(op, a1, b1),
+            fold(op, a2, b2),
+        ]))
     }
 
     fn splat(&mut self, x: Expr) -> Expr {
@@ -1041,10 +1212,12 @@ impl Lower<'_, '_> {
             // A user field, named by a string in static data.
             return self.ctx.user_name(offset as u64, ty, true);
         }
-        self.ctx
-            .defs
-            .field_at(offset as u32, ty)
-            .ok_or_else(|| anyhow!("entity field offset {offset} is not a known {} field", ty.name()))
+        self.ctx.defs.field_at(offset as u32, ty).ok_or_else(|| {
+            anyhow!(
+                "entity field offset {offset} is not a known {} field",
+                ty.name()
+            )
+        })
     }
 
     /// The string literal of `len` bytes at `ptr`. Both must be constants,
@@ -1052,12 +1225,16 @@ impl Lower<'_, '_> {
     /// `if (c) lit("a") else lit("bc")` into one call).
     fn string_literal(&mut self, ptr: &Expr, len: &Expr) -> Result<Expr> {
         match (ptr, len) {
-            (Expr::Select(c, a, b), Expr::Select(lc, la, lb)) if c == lc => {
-                Ok(Expr::Select(c.clone(), Box::new(self.string_literal(a, la)?), Box::new(self.string_literal(b, lb)?)))
-            }
-            (Expr::Select(c, a, b), Expr::Float(_)) => {
-                Ok(Expr::Select(c.clone(), Box::new(self.string_literal(a, len)?), Box::new(self.string_literal(b, len)?)))
-            }
+            (Expr::Select(c, a, b), Expr::Select(lc, la, lb)) if c == lc => Ok(Expr::Select(
+                c.clone(),
+                Box::new(self.string_literal(a, la)?),
+                Box::new(self.string_literal(b, lb)?),
+            )),
+            (Expr::Select(c, a, b), Expr::Float(_)) => Ok(Expr::Select(
+                c.clone(),
+                Box::new(self.string_literal(a, len)?),
+                Box::new(self.string_literal(b, len)?),
+            )),
             (_, Expr::Float(_)) => {
                 let len = Self::const_i32(len, "string literal length")?;
                 ensure!(len >= 0, "negative string literal length {len}");
@@ -1065,13 +1242,16 @@ impl Lower<'_, '_> {
                     // Zig may give `""` any address.
                     return Ok(Expr::Str(Vec::new()));
                 }
-                let Expr::Float(a) = ptr else { bail!("string literal address is not a constant") };
-                let bytes = self
-                    .ctx
-                    .data
-                    .string(*a as u64, len as u64)
-                    .ok_or_else(|| anyhow!("string literal at address {a} is outside of static data"))?;
-                ensure!(!bytes.contains(&0), "string literal at address {a} contains a NUL byte");
+                let Expr::Float(a) = ptr else {
+                    bail!("string literal address is not a constant")
+                };
+                let bytes = self.ctx.data.string(*a as u64, len as u64).ok_or_else(|| {
+                    anyhow!("string literal at address {a} is outside of static data")
+                })?;
+                ensure!(
+                    !bytes.contains(&0),
+                    "string literal at address {a} contains a NUL byte"
+                );
                 Ok(Expr::Str(bytes))
             }
             _ => bail!("string literal length must be a constant, found `{len:?}`"),
@@ -1079,7 +1259,11 @@ impl Lower<'_, '_> {
     }
 
     fn lower_call(&mut self, func: FunctionId) -> Result<()> {
-        let info = self.ctx.funcs.get(&func).ok_or_else(|| anyhow!("call to unknown function"))?;
+        let info = self
+            .ctx
+            .funcs
+            .get(&func)
+            .ok_or_else(|| anyhow!("call to unknown function"))?;
         let (name, sig, kind) = (info.name.clone(), info.sig.clone(), info.kind);
         let FuncKind::Intrinsic(intr) = kind else {
             return self.call(Expr::FuncName(name.clone()), &sig, &name);
@@ -1120,13 +1304,24 @@ impl Lower<'_, '_> {
                 self.emit(Stmt::Assign(Expr::Global(g), v));
             }
             EqString | NeString | EqEntity | NeEntity => {
-                let qt = if matches!(intr, EqString | NeString) { QcType::String } else { QcType::Entity };
-                let op = if matches!(intr, EqString | EqEntity) { BinOp::Eq } else { BinOp::Ne };
+                let qt = if matches!(intr, EqString | NeString) {
+                    QcType::String
+                } else {
+                    QcType::Entity
+                };
+                let op = if matches!(intr, EqString | EqEntity) {
+                    BinOp::Eq
+                } else {
+                    BinOp::Ne
+                };
                 let (b, tb) = self.pop()?;
                 let (a, ta) = self.pop()?;
                 self.unify(Ty::Known(qt), ta, &name);
                 self.unify(Ty::Known(qt), tb, &name);
-                self.stack.push((Expr::Bin(op, Box::new(a), Box::new(b)), Ty::Known(QcType::Float)));
+                self.stack.push((
+                    Expr::Bin(op, Box::new(a), Box::new(b)),
+                    Ty::Known(QcType::Float),
+                ));
             }
             LoadField(qt) => {
                 let (offset, _) = self.pop()?;
@@ -1134,7 +1329,8 @@ impl Lower<'_, '_> {
                 let name = self.field_name(&offset, qt)?;
                 self.unify(Ty::Known(QcType::Entity), te, &name);
                 let ent = self.simple(ent, Ty::Known(QcType::Entity));
-                self.stack.push((Expr::Field(Box::new(ent), name), Ty::Known(qt)));
+                self.stack
+                    .push((Expr::Field(Box::new(ent), name), Ty::Known(qt)));
             }
             StoreField(qt) => {
                 let (v, t) = self.pop()?;
@@ -1166,7 +1362,10 @@ impl Lower<'_, '_> {
                 };
                 let (b, _) = self.pop()?;
                 let (a, _) = self.pop()?;
-                self.stack.push((Expr::Bin(op, Box::new(a), Box::new(b)), Ty::Known(QcType::Float)));
+                self.stack.push((
+                    Expr::Bin(op, Box::new(a), Box::new(b)),
+                    Ty::Known(QcType::Float),
+                ));
             }
             FuncRef => {
                 let (ptr, _) = self.pop()?;
@@ -1176,17 +1375,24 @@ impl Lower<'_, '_> {
             FieldRefString => {
                 let (offset, _) = self.pop()?;
                 let name = self.field_name(&offset, QcType::String)?;
-                self.stack.push((Expr::Global(name), Ty::Known(QcType::StringField)));
+                self.stack
+                    .push((Expr::Global(name), Ty::Known(QcType::StringField)));
             }
             NotFn | NotVector => {
                 let (a, _) = self.pop()?;
-                self.stack.push((Expr::Un(UnOp::Not, Box::new(a)), Ty::Known(QcType::Float)));
+                self.stack
+                    .push((Expr::Un(UnOp::Not, Box::new(a)), Ty::Known(QcType::Float)));
             }
             NotString | NotEntity => {
-                let qt = if intr == NotString { QcType::String } else { QcType::Entity };
+                let qt = if intr == NotString {
+                    QcType::String
+                } else {
+                    QcType::Entity
+                };
                 let (a, ta) = self.pop()?;
                 self.unify(Ty::Known(qt), ta, &name);
-                self.stack.push((Expr::Un(UnOp::Not, Box::new(a)), Ty::Known(QcType::Float)));
+                self.stack
+                    .push((Expr::Un(UnOp::Not, Box::new(a)), Ty::Known(QcType::Float)));
             }
         }
         Ok(())
@@ -1264,7 +1470,9 @@ fn whole_vector(defs: &crate::sysdefs::SysDefs, parts: &[Expr; 3]) -> Option<Exp
     let base = |e: &Expr, suffix: &str| -> Option<(Option<Expr>, String)> {
         match e {
             Expr::Global(n) => Some((None, n.strip_suffix(suffix)?.to_string())),
-            Expr::Field(ent, n) => Some((Some((**ent).clone()), n.strip_suffix(suffix)?.to_string())),
+            Expr::Field(ent, n) => {
+                Some((Some((**ent).clone()), n.strip_suffix(suffix)?.to_string()))
+            }
             _ => None,
         }
     };
@@ -1274,7 +1482,8 @@ fn whole_vector(defs: &crate::sysdefs::SysDefs, parts: &[Expr; 3]) -> Option<Exp
             n == name
                 && match (&e, &ent) {
                     (None, None) => true,
-                    (Some(Expr::Local(a)), Some(Expr::Local(b))) | (Some(Expr::Global(a)), Some(Expr::Global(b))) => a == b,
+                    (Some(Expr::Local(a)), Some(Expr::Local(b)))
+                    | (Some(Expr::Global(a)), Some(Expr::Global(b))) => a == b,
                     _ => false,
                 }
         })
@@ -1306,7 +1515,8 @@ fn base_locals(
         let mut prev: Option<f32> = None;
         for (instr, _) in &func.block(seq).instrs {
             match instr {
-                Instr::LocalSet(ir::LocalSet { local }) | Instr::LocalTee(ir::LocalTee { local }) => match prev {
+                Instr::LocalSet(ir::LocalSet { local })
+                | Instr::LocalTee(ir::LocalTee { local }) => match prev {
                     Some(v) if good.get(local).is_none_or(|&g| g == v) => {
                         good.insert(*local, v);
                     }
@@ -1315,13 +1525,17 @@ fn base_locals(
                     }
                 },
                 Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => seqs.push(*seq),
-                Instr::IfElse(ir::IfElse { consequent, alternative }) => seqs.extend([*consequent, *alternative]),
+                Instr::IfElse(ir::IfElse {
+                    consequent,
+                    alternative,
+                }) => seqs.extend([*consequent, *alternative]),
                 _ => {}
             }
             prev = match instr {
-                Instr::GlobalGet(ir::GlobalGet { global }) => {
-                    bases.iter().find(|(b, _)| *b == Some(*global)).map(|&(_, v)| v)
-                }
+                Instr::GlobalGet(ir::GlobalGet { global }) => bases
+                    .iter()
+                    .find(|(b, _)| *b == Some(*global))
+                    .map(|&(_, v)| v),
                 _ => None,
             };
         }

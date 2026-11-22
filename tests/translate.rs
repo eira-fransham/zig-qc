@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn translate_bytes(wasm: &[u8]) -> String {
@@ -27,15 +29,28 @@ fn check_compiles(wasm: &[u8], extra: &str) {
         eprintln!("skipping fteqcc check: {} not found", fteqcc.display());
         return;
     }
-    let src = wasm_to_qc::translate(wasm, &wasm_to_qc::Options::default()).unwrap().source;
-    let dir = std::env::temp_dir().join(format!("wasm-to-qc-test-{}-{}", std::process::id(), rand_suffix()));
+    let src = wasm_to_qc::translate(wasm, &wasm_to_qc::Options::default())
+        .unwrap()
+        .source;
+    let dir = std::env::temp_dir().join(format!(
+        "wasm-to-qc-test-{}-{}",
+        std::process::id(),
+        rand_suffix()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("out.qc"), src).unwrap();
     std::fs::write(dir.join("extra.qc"), extra).unwrap();
     std::fs::write(dir.join("progs.src"), "progs.dat\nout.qc\nextra.qc\n").unwrap();
-    let out = Command::new(&fteqcc).arg("-Tid").current_dir(&dir).output().unwrap();
+    let out = Command::new(&fteqcc)
+        .arg("-Tid")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
     let log = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success() && dir.join("progs.dat").exists(), "fteqcc failed:\n{log}");
+    assert!(
+        out.status.success() && dir.join("progs.dat").exists(),
+        "fteqcc failed:\n{log}"
+    );
     assert!(log.contains("0 warnings"), "fteqcc warnings:\n{log}");
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -77,10 +92,20 @@ fn builtins() {
 
 #[test]
 fn builtin_signature_mismatch_is_an_error() {
-    let err = translate_err(r#"(module (import "builtin" "floor" (func (param externref) (result f32))))"#);
-    assert!(err.contains("parameter 0 should be float, but the import has externref"), "{err}");
-    let err = translate_err(r#"(module (import "builtin" "spawn" (func (param f32) (result externref))))"#);
-    assert!(err.contains("expected 0 parameters, but the import has 1"), "{err}");
+    let err = translate_err(
+        r#"(module (import "builtin" "floor" (func (param externref) (result f32))))"#,
+    );
+    assert!(
+        err.contains("parameter 0 should be float, but the import has externref"),
+        "{err}"
+    );
+    let err = translate_err(
+        r#"(module (import "builtin" "spawn" (func (param f32) (result externref))))"#,
+    );
+    assert!(
+        err.contains("expected 0 parameters, but the import has 1"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -112,17 +137,26 @@ fn field_errors() {
     let err = translate_err(&format!(
         r#"(module {load} (func (export "f") (param externref) (result f32) (call 0 (local.get 0) (i32.const 28))))"#
     ));
-    assert!(err.contains("entity field offset 28 is not a known float field"), "{err}");
+    assert!(
+        err.contains("entity field offset 28 is not a known float field"),
+        "{err}"
+    );
     // Past the end of the system fields.
     let err = translate_err(&format!(
         r#"(module {load} (func (export "f") (param externref) (result f32) (call 0 (local.get 0) (i32.const 105))))"#
     ));
-    assert!(err.contains("entity field offset 105 is not a known float field"), "{err}");
+    assert!(
+        err.contains("entity field offset 105 is not a known float field"),
+        "{err}"
+    );
     // A non-constant offset.
     let err = translate_err(&format!(
         r#"(module {load} (func (export "f") (param externref i32) (result f32) (call 0 (local.get 0) (local.get 1))))"#
     ));
-    assert!(err.contains("entity field offset must be a compile-time constant"), "{err}");
+    assert!(
+        err.contains("entity field offset must be a compile-time constant"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -133,12 +167,16 @@ fn static_data() {
 
 #[test]
 fn static_data_errors() {
-    let base = r#"(import "env" "memory" (memory 1)) (import "env" "__memory_base" (global $b i32))"#;
+    let base =
+        r#"(import "env" "memory" (memory 1)) (import "env" "__memory_base" (global $b i32))"#;
     let err = translate_err(&format!(
         r#"(module {base} (data (global.get $b) "\00\00\00\00")
             (func (export "f") (f32.store (global.get $b) (f32.const 1))))"#
     ));
-    assert!(err.contains("writes to static data are not supported"), "{err}");
+    assert!(
+        err.contains("writes to static data are not supported"),
+        "{err}"
+    );
     let err = translate_err(r#"(module (memory 1) (data (i32.const 64) "\01"))"#);
     assert!(err.contains("is not relative to `__memory_base`"), "{err}");
     let err = translate_err(&format!(
@@ -171,7 +209,10 @@ fn unknown_import_module_is_an_error() {
 #[test]
 fn unknown_intrinsic_is_an_error() {
     let err = translate_err(r#"(module (import "env" "__quakec_bogus" (func)))"#);
-    assert!(err.contains("unknown QuakeC intrinsic `__quakec_bogus`"), "{err}");
+    assert!(
+        err.contains("unknown QuakeC intrinsic `__quakec_bogus`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -189,7 +230,10 @@ fn string_literal_errors() {
         r#"(module {base} (func (export "f") (param i32) (result externref)
             (call $lit (i32.add (global.get $b) (local.get 0)) (i32.const 1))))"#
     ));
-    assert!(err.contains("string literal address is not a constant"), "{err}");
+    assert!(
+        err.contains("string literal address is not a constant"),
+        "{err}"
+    );
     let err = translate_err(&format!(
         r#"(module {base} (func (export "f") (param i32) (result externref)
             (call $lit (global.get $b) (local.get 0))))"#

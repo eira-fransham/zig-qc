@@ -5,7 +5,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn temp_dir() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("zig-qc-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!(
+        "zig-qc-test-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -21,24 +25,36 @@ fn zig_qc(dir: &Path, args: &[&str], path: Option<&OsString>) -> Output {
 }
 
 fn on_path(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }
 
 #[test]
 fn init() {
     let dir = temp_dir();
     let out = zig_qc(&dir, &["init", "my_mod"], None);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let build = std::fs::read_to_string(dir.join("build.zig")).unwrap();
-    assert!(build.contains("\"my_mod-unopt\"") && build.contains("\"out-name\""), "{build}");
+    assert!(
+        build.contains("\"my_mod-unopt\"") && build.contains("\"out-name\""),
+        "{build}"
+    );
     assert!(!build.contains("@NAME@"));
     let zon = std::fs::read_to_string(dir.join("build.zig.zon")).unwrap();
     assert!(zon.contains(".name = .my_mod,"), "{zon}");
     // Zig's fingerprint check: the high half is the CRC-32 of the name.
     assert!(zon.contains(".fingerprint = 0x8ab1aa37"), "{zon}");
     let defs = std::fs::read_to_string(dir.join("src/defs.zig")).unwrap();
-    assert_eq!(defs, std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/zig-src/src/defs.zig")).unwrap());
+    assert_eq!(
+        defs,
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/zig-src/src/defs.zig"))
+            .unwrap()
+    );
     assert!(dir.join("src/root.zig").is_file());
 
     // Never overwrites an existing project.
@@ -54,7 +70,10 @@ fn init_rejects_bad_names() {
         let dir = temp_dir();
         let out = zig_qc(&dir, &["init", name], None);
         assert!(!out.status.success(), "accepted `{name}`");
-        assert!(String::from_utf8_lossy(&out.stderr).contains("invalid project name"), "`{name}`");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("invalid project name"),
+            "`{name}`"
+        );
         assert!(!dir.join("build.zig").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -87,7 +106,8 @@ fn init_and_build() {
     let dir = temp_dir();
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::os::unix::fs::symlink(std::fs::canonicalize(&fteqcc).unwrap(), bin.join("fteqcc")).unwrap();
+    std::os::unix::fs::symlink(std::fs::canonicalize(&fteqcc).unwrap(), bin.join("fteqcc"))
+        .unwrap();
     let mut paths = vec![bin];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
     let path = std::env::join_paths(paths).unwrap();
@@ -115,7 +135,11 @@ fn init_name_from_directory() {
     let project = dir.join("1st-cool.mod");
     std::fs::create_dir_all(&project).unwrap();
     let out = zig_qc(&project, &["init"], None);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(String::from_utf8_lossy(&out.stdout).contains("using project name `_1st_cool_mod`"));
     let zon = std::fs::read_to_string(project.join("build.zig.zon")).unwrap();
     assert!(zon.contains(".name = ._1st_cool_mod,"), "{zon}");
