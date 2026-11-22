@@ -3,10 +3,11 @@
   (import "env" "__quakec_load_string" (func $load_string (param i32) (result i64)))
   (import "env" "__quakec_load_entity" (func $load_entity (param i32) (result i64)))
   (import "env" "__quakec_store_entity" (func $store_entity (param i32 i64)))
-  (import "env" "__quakec_store_fn" (func $store_fn (param i32 funcref)))
+  (import "env" "__quakec_store_fn" (func $store_fn (param i32 i32)))
+  (import "env" "__indirect_function_table" (table 1 funcref))
   (import "env" "__quakec_eq_string" (func $eq_string (param i64 i64) (result i32)))
   (import "env" "__quakec_not_entity" (func $not_entity (param i64) (result i32)))
-  (elem declare func $think)
+  (elem (i32.const 0) func $think)
   (func $think)
   ;; is_map(name): mapname == name
   (func (export "is_map") (param $name i64) (result i32)
@@ -16,7 +17,7 @@
     (if (call $not_entity (local.get $e))
       (then (call $store_entity (i32.const 116) (call $load_entity (i32.const 112))))
       (else (call $store_entity (i32.const 116) (local.get $e))))
-    (call $store_fn (i32.const 332) (ref.func $think)))
+    (call $store_fn (i32.const 332) (i32.const 0)))
   ;; time read before a store must not observe the store
   (func (export "swap_time") (param $t f32) (result f32)
     (f32.load (i32.const 124))

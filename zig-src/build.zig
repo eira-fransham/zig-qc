@@ -1,16 +1,16 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // wasm32 with every feature enabled (notably reference types, SIMD and
-    // tail calls), which is what zig-qc expects, except relaxed SIMD:
-    // QuakeC has no equivalent, and wasm-opt is run without it.
+    // wasm32 with every feature enabled (notably SIMD), which is what zig-qc
+    // expects, except relaxed SIMD (QuakeC has no equivalent, and wasm-opt is
+    // run without it) and tail calls (QuakeC has none either).
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .cpu_model = .{
             .explicit = &std.Target.wasm.cpu.bleeding_edge,
         },
-        .cpu_features_sub = std.Target.wasm.featureSet(&.{.relaxed_simd}),
+        .cpu_features_sub = std.Target.wasm.featureSet(&.{ .relaxed_simd, .tail_call }),
     });
 
     const out_name = b.option([]const u8, "out-name", "Name of the installed .wasm file") orelse "test.wasm";
@@ -62,7 +62,6 @@ fn addOptLibrary(b: *std.Build, name: []const u8, root_module: *std.Build.Module
         "--enable-reference-types",
         "--enable-bulk-memory-opt",
         "--enable-simd",
-        "--enable-tail-call",
         "--enable-nontrapping-float-to-int",
         "--enable-extended-const",
     });

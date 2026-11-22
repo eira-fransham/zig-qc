@@ -45,6 +45,10 @@ fn init() {
         "{build}"
     );
     assert!(!build.contains("@NAME@"));
+    // QuakeC has no tail calls, and merged functions are handled.
+    assert!(build.contains(".tail_call"), "{build}");
+    assert!(!build.contains("--enable-tail-call"), "{build}");
+    assert!(!build.contains("merge-similar-functions"), "{build}");
     let zon = std::fs::read_to_string(dir.join("build.zig.zon")).unwrap();
     assert!(zon.contains(".name = .my_mod,"), "{zon}");
     // Zig's fingerprint check: the high half is the CRC-32 of the name.

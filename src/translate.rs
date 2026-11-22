@@ -1,24 +1,21 @@
-//! Module-level translation: classify imports/exports, lower each function,
-//! then resolve types and render QuakeC source.
+//! Module-level translation: prepare the module and parse it into SSA,
+//! classify imports and exports, infer types, emit each function instance,
+//! then render QuakeC source.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use anyhow::{Context as _, Result, bail, ensure};
-use walrus::ir::Value;
-use walrus::{
-    ConstExpr, ElementItems, ElementKind, ExportItem, FunctionId, FunctionKind, GlobalId,
-    GlobalKind, ImportKind, LocalId, Module, TableId, ValType,
-};
+use waffle::entity::EntityRef;
+use waffle::{ExportKind, Func, FuncDecl, Global, ImportKind, Module, Type};
 
-use crate::data::{DATA_BASE, DataKind, StaticData, relative_offset};
-use crate::lower;
-use crate::params::{self, ParamRepr};
+use crate::data::{DATA_BASE, DataKind, StaticData};
+use crate::emit;
+use crate::infer::{Infer, Kind};
+use crate::prepare::prepare;
 use crate::qc::{QcType, Sig, Ty, TypeVars};
 use crate::sysdefs::{self, GlobalMap, SysDefs};
 
-/// The name of the table LLVM uses to call `funcref`s.
-pub const CALL_TABLE: &str = "__funcref_call_table";
 /// Import module for numbered builtins. Vanilla NetQuake builtins are
 /// recognised by name and emitted as `= #N`; any others are emitted as plain
 /// prototypes, and the defs (e.g. `defs.qc`) must supply their definitions.
@@ -26,7 +23,7 @@ pub const BUILTIN_MODULE: &str = "builtin";
 /// Import module for builtins without a number. These are emitted as
 /// `= #0`, which the engine resolves by name.
 pub const UNNAMED_BUILTIN_MODULE: &str = "unnamed-builtin";
-/// Import module for memory, the call table and `__quakec_*` intrinsics.
+/// Import module for memory, the function table and `__quakec_*` intrinsics.
 pub const ENV_MODULE: &str = "env";
 /// The table holding the targets of Zig function pointers.
 pub const INDIRECT_TABLE: &str = "__indirect_function_table";
@@ -39,35 +36,21 @@ pub const TABLE_BASE: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Intrinsic {
-    LoadFloat,
-    LoadVector,
-    StoreFloat,
-    StoreVector,
-    LoadEntity,
-    LoadString,
-    LoadFn,
-    StoreEntity,
-    StoreString,
-    StoreFn,
-    EqString,
-    NeString,
-    EqEntity,
-    NeEntity,
-    NotString,
-    NotEntity,
-    EqFn,
-    NeFn,
-    NotFn,
-    EqVector,
-    NeVector,
-    NotVector,
+    /// `__quakec_load_<ty>(addr)`: read the QuakeC global at `addr`.
+    LoadGlobal(QcType),
+    /// `__quakec_store_<ty>(addr, value)`
+    StoreGlobal(QcType),
+    /// `__quakec_eq_<ty>(a, b)`
+    Eq(QcType),
+    /// `__quakec_ne_<ty>(a, b)`
+    Ne(QcType),
+    /// `__quakec_not_<ty>(a)`
+    Not(QcType),
     /// `__quakec_dot_vector(a, b)`: `a * b` on vectors (`MUL_V`).
     DotVector,
-    /// `__quakec_func_ref(fnptr)`: a Zig function pointer as a QuakeC function.
-    FuncRef,
     /// `__quakec_field_ref_string(field)`: a `.string` field reference.
     FieldRefString,
-    /// `__quakec_string_literal(ptr, len)`
+    /// `__quakec_string_literal(ptr)`: the NUL-terminated literal at `ptr`.
     StringLiteral,
     /// `__quakec_load_entity_field_<ty>(ent, field)`
     LoadField(QcType),
@@ -77,54 +60,51 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     fn from_name(name: &str) -> Option<Self> {
+        let ty = |t: &str| {
+            Some(match t {
+                "float" => QcType::Float,
+                "vector" => QcType::Vector,
+                "string" => QcType::String,
+                "entity" => QcType::Entity,
+                "fn" => QcType::Func,
+                _ => return None,
+            })
+        };
+        let name = name.strip_prefix("__quakec_")?;
         Some(match name {
-            "__quakec_load_float" => Self::LoadFloat,
-            "__quakec_load_vector" => Self::LoadVector,
-            "__quakec_store_float" => Self::StoreFloat,
-            "__quakec_store_vector" => Self::StoreVector,
-            "__quakec_load_entity" => Self::LoadEntity,
-            "__quakec_load_string" => Self::LoadString,
-            "__quakec_load_fn" => Self::LoadFn,
-            "__quakec_store_entity" => Self::StoreEntity,
-            "__quakec_store_string" => Self::StoreString,
-            "__quakec_store_fn" => Self::StoreFn,
-            "__quakec_eq_string" => Self::EqString,
-            "__quakec_ne_string" => Self::NeString,
-            "__quakec_eq_entity" => Self::EqEntity,
-            "__quakec_ne_entity" => Self::NeEntity,
-            "__quakec_not_string" => Self::NotString,
-            "__quakec_not_entity" => Self::NotEntity,
-            "__quakec_eq_fn" => Self::EqFn,
-            "__quakec_ne_fn" => Self::NeFn,
-            "__quakec_not_fn" => Self::NotFn,
-            "__quakec_eq_vector" => Self::EqVector,
-            "__quakec_ne_vector" => Self::NeVector,
-            "__quakec_not_vector" => Self::NotVector,
-            "__quakec_dot_vector" => Self::DotVector,
-            "__quakec_func_ref" => Self::FuncRef,
-            "__quakec_field_ref_string" => Self::FieldRefString,
-            "__quakec_string_literal" => Self::StringLiteral,
+            "dot_vector" => Self::DotVector,
+            "field_ref_string" => Self::FieldRefString,
+            "string_literal" => Self::StringLiteral,
             _ => {
-                let (load, ty) = if let Some(t) = name.strip_prefix("__quakec_load_entity_field_") {
-                    (true, t)
-                } else {
-                    (false, name.strip_prefix("__quakec_store_entity_field_")?)
-                };
-                let ty = match ty {
-                    "float" => QcType::Float,
-                    "vector" => QcType::Vector,
-                    "string" => QcType::String,
-                    "entity" => QcType::Entity,
-                    "fn" => QcType::Func,
+                let (op, t) = name.split_once('_')?;
+                match op {
+                    "load" => match t.strip_prefix("entity_field_") {
+                        Some(t) => Self::LoadField(ty(t)?),
+                        None => Self::LoadGlobal(ty(t)?),
+                    },
+                    "store" => match t.strip_prefix("entity_field_") {
+                        Some(t) => Self::StoreField(ty(t)?),
+                        None => Self::StoreGlobal(ty(t)?),
+                    },
+                    "eq" => Self::Eq(ty(t)?),
+                    "ne" => Self::Ne(ty(t)?),
+                    "not" => Self::Not(ty(t)?),
                     _ => return None,
-                };
-                if load {
-                    Self::LoadField(ty)
-                } else {
-                    Self::StoreField(ty)
                 }
             }
         })
+    }
+
+    /// The number of wasm parameters and results it must have.
+    fn arity(self) -> (usize, usize) {
+        match self {
+            Self::LoadGlobal(_) | Self::Not(_) | Self::FieldRefString | Self::StringLiteral => {
+                (1, 1)
+            }
+            Self::StoreGlobal(_) => (2, 0),
+            Self::Eq(_) | Self::Ne(_) | Self::DotVector | Self::LoadField(_) => (2, 1),
+            Self::StoreField(_) => (3, 0),
+        }
     }
 }
 
@@ -142,41 +122,31 @@ pub enum FuncKind {
 
 pub struct FuncInfo {
     pub name: String,
-    pub sig: Sig,
     pub kind: FuncKind,
 }
 
-/// State shared by all function lowerings.
+/// State shared by all of the translation.
 pub struct Ctx<'m> {
-    pub module: &'m Module,
+    pub module: &'m Module<'m>,
     /// The target engine's system defs.
     pub defs: &'static SysDefs,
     pub globals: GlobalMap,
-    pub funcs: HashMap<FunctionId, FuncInfo>,
-    pub wasm_globals: HashMap<GlobalId, (String, Ty)>,
-    pub call_table: Option<TableId>,
-    pub tv: TypeVars,
+    pub funcs: HashMap<Func, FuncInfo>,
+    /// Wasm globals that become QuakeC globals, by name.
+    pub wasm_globals: HashMap<Global, String>,
     pub warnings: Vec<String>,
-    /// The imported `__memory_base` global, if any.
-    pub memory_base: Option<GlobalId>,
     pub data: StaticData,
     /// Accessor functions needed for dynamic loads from static data.
     pub data_accessors: BTreeSet<DataKind>,
-    /// The imported `__table_base` global, if any.
-    pub table_base: Option<GlobalId>,
-    /// The imported `__stack_pointer` global, if any. Using it is an error
-    /// (see `lower.rs`); importing it without using it is fine.
-    pub stack_pointer: Option<GlobalId>,
+    /// The imported `__stack_pointer` global, if any. Using it is an error;
+    /// importing it without using it is fine.
+    pub stack_pointer: Option<Global>,
     /// Functions in `__indirect_function_table`, by index.
-    pub table_funcs: HashMap<u64, FunctionId>,
+    pub table_funcs: HashMap<u64, Func>,
     /// Globals and fields declared by the module (by name, see
     /// [`Ctx::user_name`]), with their types.
     pub user_globals: BTreeMap<String, QcType>,
     pub user_fields: BTreeMap<String, QcType>,
-    /// Parameters retyped as functions or strings (see `params.rs`).
-    pub param_reprs: HashMap<FunctionId, Vec<Option<ParamRepr>>>,
-    /// Locals that may alias retyped parameters (see `params.rs`).
-    pub param_aliases: HashMap<FunctionId, HashSet<LocalId>>,
 }
 
 impl Ctx<'_> {
@@ -215,41 +185,16 @@ impl Ctx<'_> {
         Ok(name)
     }
 
-    /// Convert a wasm value type into a (possibly inferred) QuakeC type.
-    pub fn val_ty(&mut self, t: ValType) -> Result<Ty> {
-        Ok(match t {
-            ValType::I32 | ValType::F32 => Ty::Known(QcType::Float),
-            // An opaque handle (`defs.Entity`, `defs.String` or a field
-            // reference); which one is inferred from how it is used.
-            ValType::I64 => self.tv.fresh(),
-            ValType::Ref(r) if r == walrus::RefType::FUNCREF => Ty::Known(QcType::Func),
-            // `@Vector(3, f32)`; the fourth lane is ignored.
-            ValType::V128 => Ty::Known(QcType::Vector),
-            other => bail!(
-                "unsupported value type {other:?} (only i32, f32, v128, funcref and i64 handles are supported)"
-            ),
-        })
-    }
-
-    pub fn sig_of_type(&mut self, ty: walrus::TypeId) -> Result<Sig> {
-        let t = self.module.types.get(ty);
-        let params = t
-            .params()
+    /// The local functions, in index order.
+    pub fn local_funcs(&self) -> Vec<Func> {
+        let mut fs: Vec<Func> = self
+            .funcs
             .iter()
-            .map(|&p| self.val_ty(p))
-            .collect::<Result<Vec<_>>>()?;
-        if params.len() > 8 {
-            bail!(
-                "QuakeC functions take at most 8 parameters, found {}",
-                params.len()
-            );
-        }
-        let ret = match t.results() {
-            [] => Ty::Known(QcType::Void),
-            [r] => self.val_ty(*r)?,
-            _ => bail!("multi-value returns are not supported"),
-        };
-        Ok(Sig { params, ret })
+            .filter(|(_, i)| i.kind == FuncKind::Local)
+            .map(|(&f, _)| f)
+            .collect();
+        fs.sort();
+        fs
     }
 }
 
@@ -271,26 +216,31 @@ pub struct Output {
 }
 
 pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
-    let module = Module::from_buffer(wasm).context("failed to parse wasm module")?;
-
-    // `__memory_base` and `__table_base` are needed to find static data
-    // (and so the target) and the function table before anything else.
-    let mut memory_base = None;
-    let mut table_base = None;
-    let mut stack_pointer = None;
-    for import in module.imports.iter() {
-        if let ImportKind::Global(g) = import.kind
-            && import.module == ENV_MODULE
-        {
-            match import.name.as_str() {
-                "__memory_base" => memory_base = Some(g),
-                "__table_base" => table_base = Some(g),
-                "__stack_pointer" => stack_pointer = Some(g),
-                _ => {}
-            }
+    let prepared = prepare(wasm)?;
+    let mut module = Module::from_wasm_bytes(&prepared.wasm, &Default::default())
+        .context("failed to parse wasm module")?;
+    module
+        .expand_all_funcs()
+        .context("failed to parse wasm functions")?;
+    for (_, f) in module.funcs.entries_mut() {
+        if let Some(body) = f.body_mut() {
+            crate::prepare::simplify_params(body);
+            crate::prepare::merge_blocks(body);
         }
     }
-    let mut data = StaticData::from_module(&module, memory_base)?;
+    let module = module;
+
+    ensure!(
+        module.passive_data_segments.is_empty(),
+        "passive data segments are not supported"
+    );
+    let mut segments = Vec::new();
+    for (_, mem) in module.memories.entries() {
+        for seg in &mem.segments {
+            segments.push((seg.offset as u64, seg.data.as_slice()));
+        }
+    }
+    let mut data = StaticData::from_segments(&segments)?;
     let defs = target(&module, &mut data)?;
 
     let mut ctx = Ctx {
@@ -299,225 +249,157 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         globals: defs.global_map(),
         funcs: HashMap::new(),
         wasm_globals: HashMap::new(),
-        call_table: None,
-        tv: TypeVars::default(),
         warnings: Vec::new(),
-        memory_base,
         data,
         data_accessors: BTreeSet::new(),
-        table_base,
-        stack_pointer,
+        stack_pointer: None,
         table_funcs: HashMap::new(),
         user_globals: BTreeMap::new(),
         user_fields: BTreeMap::new(),
-        param_reprs: HashMap::new(),
-        param_aliases: HashMap::new(),
     };
 
-    // Tables: the LLVM funcref call table, and the table of Zig function
-    // pointers (only used through `__quakec_func_ref`).
-    let mut indirect_table = None;
-    for table in module.tables.iter() {
-        let imported_as = |name: &str| {
-            module.imports.iter().any(|i| {
-                i.module == ENV_MODULE
-                    && i.name == name
-                    && matches!(i.kind, ImportKind::Table(t) if t == table.id())
-            })
-        };
-        if imported_as(INDIRECT_TABLE) {
-            indirect_table = Some(table.id());
-            continue;
-        }
-        let is_call_table = module.exports.iter().any(|e| {
-            e.name == CALL_TABLE && matches!(e.item, ExportItem::Table(t) if t == table.id())
-        }) || table.name.as_deref() == Some(CALL_TABLE)
-            || imported_as(CALL_TABLE);
-        if !is_call_table {
-            bail!(
-                "unsupported table {:?}; only `{CALL_TABLE}` and `{INDIRECT_TABLE}` may be used",
-                table.name
-            );
-        }
-        ensure!(ctx.call_table.is_none(), "more than one `{CALL_TABLE}`");
-        ctx.call_table = Some(table.id());
-    }
-    for el in module.elements.iter() {
-        let ElementKind::Active { table, offset } = &el.kind else {
-            continue;
-        };
-        ensure!(
-            Some(*table) == indirect_table,
-            "element segment for an unsupported table"
-        );
-        let base = relative_offset(offset, table_base)
-            .or_else(|| match offset {
-                ConstExpr::Value(Value::I32(k)) => usize::try_from(*k).ok(),
-                _ => None,
-            })
-            .with_context(|| {
-                format!("element segment at {offset:?} is not relative to `__table_base`")
-            })?;
-        let ElementItems::Functions(fs) = &el.items else {
-            bail!("unsupported element segment items")
-        };
-        for (i, &f) in fs.iter().enumerate() {
-            ctx.table_funcs.insert(TABLE_BASE + (base + i) as u64, f);
-        }
-    }
-
     // Imports.
-    for import in module.imports.iter() {
+    let mut indirect_table = None;
+    let mut imported_globals = Vec::new();
+    for import in &module.imports {
         match import.kind {
             ImportKind::Memory(_) => {}
-            ImportKind::Function(f) => {
-                let ty = module.funcs.get(f).ty();
-                let sig = ctx
-                    .sig_of_type(ty)
-                    .with_context(|| format!("in signature of import `{}`", import.name))?;
-                let kind = match import.module.as_str() {
-                    BUILTIN_MODULE => match ctx.defs.builtin(&import.name) {
-                        Some(b) => {
-                            check_builtin_sig(&mut ctx.tv, b, &sig).with_context(|| {
-                                format!(
-                                    "in import of {} builtin `{}` (#{})",
-                                    ctx.defs.name, b.name, b.number
-                                )
-                            })?;
-                            FuncKind::Builtin(Some(b.number))
-                        }
-                        None => FuncKind::Builtin(None),
-                    },
-                    UNNAMED_BUILTIN_MODULE => FuncKind::UnnamedBuiltin,
-                    ENV_MODULE => match Intrinsic::from_name(&import.name) {
-                        Some(i) => FuncKind::Intrinsic(i),
-                        None if import.name.starts_with("__quakec_") => {
-                            bail!("unknown QuakeC intrinsic `{}`", import.name)
-                        }
-                        None => bail!(
-                            "unknown import `{ENV_MODULE}.{}`; QuakeC builtins must be imported \
-                             from `{BUILTIN_MODULE}` or `{UNNAMED_BUILTIN_MODULE}`",
-                            import.name
-                        ),
-                    },
-                    other => bail!(
-                        "unsupported import module `{other}` (for `{}`); expected \
-                         `{ENV_MODULE}`, `{BUILTIN_MODULE}` or `{UNNAMED_BUILTIN_MODULE}`",
-                        import.name
-                    ),
-                };
+            ImportKind::Table(t) => {
+                if import.module == ENV_MODULE && import.name == INDIRECT_TABLE {
+                    indirect_table = Some(t);
+                }
+            }
+            ImportKind::Func(f) => {
+                let kind = import_kind(&ctx, f, &import.module, &import.name)?;
                 ctx.funcs.insert(
                     f,
                     FuncInfo {
                         name: import.name.clone(),
-                        sig,
                         kind,
                     },
                 );
             }
-            ImportKind::Table(_) => {}
-            // Static data is placed relative to `__memory_base` (see `data.rs`),
-            // and function pointers relative to `__table_base`. wasm-ld may
-            // import `__stack_pointer` even if nothing uses it; uses are
-            // rejected when lowering.
-            ImportKind::Global(_)
-                if import.module == ENV_MODULE
-                    && matches!(
-                        import.name.as_str(),
-                        "__memory_base" | "__table_base" | "__stack_pointer"
-                    ) => {}
-            ImportKind::Global(_) => {
-                bail!(
-                    "imported global `{}.{}` is not supported",
-                    import.module,
-                    import.name
-                )
+            // Static data and function pointers are placed at fixed bases
+            // (see `prepare.rs`). wasm-ld may import `__stack_pointer` even
+            // if nothing uses it; uses are rejected during inference.
+            ImportKind::Global(g) => {
+                imported_globals.push(g);
+                match (import.module.as_str(), import.name.as_str()) {
+                    (ENV_MODULE, "__stack_pointer") => ctx.stack_pointer = Some(g),
+                    (ENV_MODULE, "__memory_base" | "__table_base") => {}
+                    _ => bail!(
+                        "imported global `{}.{}` is not supported",
+                        import.module,
+                        import.name
+                    ),
+                }
             }
-            ImportKind::Tag(_) => bail!("imported tag `{}` is not supported", import.name),
         }
     }
 
-    // Wasm globals become QuakeC float globals. Exported ones are data
-    // symbols (like `__quakec_target`), which code doesn't use.
-    for g in module.globals.iter() {
-        let exported = module
-            .exports
-            .iter()
-            .any(|e| matches!(e.item, ExportItem::Global(x) if x == g.id()));
-        if let GlobalKind::Local(_) = g.kind
-            && !exported
-        {
+    // The function table.
+    if let Some(t) = indirect_table
+        && let Some(elems) = &module.tables[t].func_elements
+    {
+        for (i, &f) in elems.iter().enumerate() {
+            if f.is_valid() {
+                ctx.table_funcs.insert(i as u64, f);
+            }
+        }
+    }
+
+    // Wasm globals become QuakeC globals. Exported ones are data symbols
+    // (like `__quakec_target`), which code doesn't use.
+    let exported_globals: Vec<Global> = module
+        .exports
+        .iter()
+        .filter_map(|e| match e.kind {
+            ExportKind::Global(g) => Some(g),
+            _ => None,
+        })
+        .collect();
+    for (g, _) in module.globals.entries() {
+        if !imported_globals.contains(&g) && !exported_globals.contains(&g) {
             let name = format!("__wasm_g{}", ctx.wasm_globals.len());
-            let ty = ctx.val_ty(g.ty).context("in wasm global")?;
-            ctx.wasm_globals.insert(g.id(), (name, ty));
+            ctx.wasm_globals.insert(g, name);
         }
     }
 
     // Local function names: exported name if any, else a generated one.
-    let mut export_names: HashMap<FunctionId, String> = HashMap::new();
-    for e in module.exports.iter() {
-        if let ExportItem::Function(f) = e.item {
+    let mut export_names: HashMap<Func, String> = HashMap::new();
+    for e in &module.exports {
+        if let ExportKind::Func(f) = e.kind {
             export_names.entry(f).or_insert_with(|| e.name.clone());
         }
     }
-    let mut local_ids = Vec::new();
-    for (i, f) in module.funcs.iter().enumerate() {
-        if let FunctionKind::Local(_) = &f.kind {
+    for (f, decl) in module.funcs.entries() {
+        if let FuncDecl::Body(_, debug_name, _) = decl {
             // Internal functions are prefixed so they can't collide with
             // QuakeC globals, fields or builtins.
-            let name = match (export_names.get(&f.id()), &f.name) {
-                (Some(export), _) => export.clone(),
-                (None, Some(debug_name)) => format!("__wasm_{}", sanitize(debug_name)),
-                (None, None) => format!("__wasm_f{i}"),
+            let name = match export_names.get(&f) {
+                Some(export) => export.clone(),
+                None if !debug_name.is_empty() => format!("__wasm_{}", sanitize(debug_name)),
+                None => format!("__wasm_f{}", prepared.original_index[f.index()]),
             };
-            let sig = ctx
-                .sig_of_type(f.ty())
-                .with_context(|| format!("in signature of function `{name}`"))?;
             ctx.funcs.insert(
-                f.id(),
+                f,
                 FuncInfo {
                     name,
-                    sig,
                     kind: FuncKind::Local,
                 },
             );
-            local_ids.push(f.id());
         }
     }
 
-    // Parameters holding functions or string literals become QuakeC ones.
-    let retyped = params::find(&ctx, &local_ids);
-    ctx.param_reprs = retyped.reprs;
-    ctx.param_aliases = retyped.aliases;
-    for (f, reprs) in &ctx.param_reprs {
-        let sig = &mut ctx.funcs.get_mut(f).unwrap().sig;
-        for (p, r) in sig.params.iter_mut().zip(reprs) {
-            match r {
-                Some(ParamRepr::Func { .. }) => *p = Ty::Known(QcType::Func),
-                Some(ParamRepr::Str { .. }) => *p = Ty::Known(QcType::String),
-                Some(ParamRepr::Field { ty, .. }) => {
-                    *p = Ty::Known(ty.field_of().expect("fields have value types"))
-                }
-                None => {}
-            }
+    // Types, and the instances of each function to emit.
+    let mut inf = Infer::run(&ctx)?;
+    let mut roots: Vec<Func> = export_names.keys().copied().collect();
+    roots.extend(ctx.table_funcs.values().copied());
+    roots.extend(module.start_func);
+    roots.retain(|f| ctx.funcs[f].kind == FuncKind::Local);
+    roots.sort();
+    roots.dedup();
+    let instances = inf.instances(&ctx, &roots)?;
+
+    let mut sigs = HashMap::new();
+    for inst in &instances {
+        let (ps, rs) = inf.signature(inst)?;
+        ensure!(
+            ps.len() <= 8,
+            "QuakeC functions take at most 8 parameters, but `{}` takes {}",
+            inst.name,
+            ps.len()
+        );
+        ensure!(rs.len() <= 1, "multi-value returns are not supported (in `{}`)", inst.name);
+        sigs.insert(inst.name.clone(), sig_of(&ps, &rs));
+    }
+    for (f, info) in &ctx.funcs {
+        if let FuncKind::Builtin(_) | FuncKind::UnnamedBuiltin = info.kind {
+            let (ps, rs) = match ctx.defs.builtin(&info.name).filter(|_| {
+                matches!(info.kind, FuncKind::Builtin(Some(_)))
+            }) {
+                Some(b) => (
+                    b.params.iter().map(|&t| Kind::from_qc(t).unwrap()).collect(),
+                    Kind::from_qc(b.ret).into_iter().collect(),
+                ),
+                None => inf.import(*f).unwrap_or_default(),
+            };
+            sigs.insert(info.name.clone(), sig_of(&ps, &rs));
         }
     }
 
-    // Lower all functions.
     let mut functions = Vec::new();
-    for &id in &local_ids {
-        let FunctionKind::Local(lf) = &module.funcs.get(id).kind else {
-            unreachable!()
-        };
-        let name = ctx.funcs[&id].name.clone();
-        let f = lower::lower_function(&mut ctx, id, lf)
-            .with_context(|| format!("while translating function `{name}`"))?;
-        functions.push(f);
+    for (i, inst) in instances.iter().enumerate() {
+        let ((f, i), func) = emit::emit(&mut ctx, &mut inf, &instances, i, &sigs)
+            .with_context(|| format!("while translating function `{}`", inst.name))?;
+        functions.push(((prepared.original_index[f.index()], i), func));
     }
+    // In the original index order, so that output is stable.
+    functions.sort_by_key(|(order, _)| *order);
+    let functions: Vec<_> = functions.into_iter().map(|(_, f)| f).collect();
 
-    let mut tv = std::mem::take(&mut ctx.tv);
-    let mut warnings = std::mem::take(&mut ctx.warnings);
-    warnings.extend(tv.conflicts.iter().cloned());
+    let mut tv = TypeVars::default();
+    let warnings = std::mem::take(&mut ctx.warnings);
 
     // ---- render ----
     let mut out = String::new();
@@ -552,10 +434,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
 
     if !ctx.wasm_globals.is_empty() {
         out.push_str("// ---- wasm globals ----\n");
-        let mut gs: Vec<_> = ctx.wasm_globals.values().cloned().collect();
-        gs.sort_by(|a, b| a.0.cmp(&b.0));
-        for (name, ty) in gs {
-            let _ = writeln!(out, "{} {name};", tv.resolve(ty).name());
+        let mut gs: Vec<_> = ctx.wasm_globals.iter().collect();
+        gs.sort_by(|a, b| a.1.cmp(b.1));
+        for (&g, name) in gs {
+            let _ = writeln!(out, "{} {name};", inf.global(g).qc().name());
         }
         out.push('\n');
     }
@@ -569,7 +451,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     if !imports.is_empty() {
         out.push_str("// ---- imports ----\n");
         for f in imports {
-            let sig = f.sig.render(&mut tv);
+            let sig = sigs[&f.name].render(&mut tv);
             match f.kind {
                 FuncKind::Builtin(Some(n)) => {
                     let _ = writeln!(out, "{sig} {} = #{n};", f.name);
@@ -612,19 +494,67 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     })
 }
 
+fn sig_of(ps: &[Kind], rs: &[Kind]) -> Sig {
+    Sig {
+        params: ps.iter().map(|k| Ty::Known(k.qc())).collect(),
+        ret: Ty::Known(rs.first().map_or(QcType::Void, |k| k.qc())),
+    }
+}
+
+/// Classify an imported function.
+fn import_kind(ctx: &Ctx<'_>, f: Func, module: &str, name: &str) -> Result<FuncKind> {
+    let sig = &ctx.module.signatures[ctx.module.funcs[f].sig()];
+    Ok(match module {
+        BUILTIN_MODULE => match ctx.defs.builtin(name) {
+            Some(b) => {
+                check_builtin_sig(b, &sig.params, &sig.returns).with_context(|| {
+                    format!(
+                        "in import of {} builtin `{}` (#{})",
+                        ctx.defs.name, b.name, b.number
+                    )
+                })?;
+                FuncKind::Builtin(Some(b.number))
+            }
+            None => FuncKind::Builtin(None),
+        },
+        UNNAMED_BUILTIN_MODULE => FuncKind::UnnamedBuiltin,
+        ENV_MODULE => match Intrinsic::from_name(name) {
+            Some(i) => {
+                let (np, nr) = i.arity();
+                ensure!(
+                    sig.params.len() == np && sig.returns.len() == nr,
+                    "intrinsic `{name}` should take {np} parameters and return {nr} values"
+                );
+                FuncKind::Intrinsic(i)
+            }
+            None if name.starts_with("__quakec_") => {
+                bail!("unknown QuakeC intrinsic `{name}`")
+            }
+            None => bail!(
+                "unknown import `{ENV_MODULE}.{name}`; QuakeC builtins must be imported \
+                 from `{BUILTIN_MODULE}` or `{UNNAMED_BUILTIN_MODULE}`"
+            ),
+        },
+        other => bail!(
+            "unsupported import module `{other}` (for `{name}`); expected \
+             `{ENV_MODULE}`, `{BUILTIN_MODULE}` or `{UNNAMED_BUILTIN_MODULE}`"
+        ),
+    })
+}
+
 /// Find the system defs named by the exported `__quakec_target` string.
-fn target(module: &Module, data: &mut StaticData) -> Result<&'static SysDefs> {
+fn target(module: &Module<'_>, data: &mut StaticData) -> Result<&'static SysDefs> {
     let Some(export) = module.exports.iter().find(|e| e.name == TARGET_EXPORT) else {
         return Ok(&sysdefs::VANILLA);
     };
-    let ExportItem::Global(g) = export.item else {
+    let ExportKind::Global(g) = export.kind else {
         bail!("`{TARGET_EXPORT}` must be exported data")
     };
-    let GlobalKind::Local(ConstExpr::Value(Value::I32(offset))) = module.globals.get(g).kind else {
+    let Some(offset) = module.globals[g].value else {
         bail!("`{TARGET_EXPORT}` must be exported data");
     };
     let name = data
-        .c_string(DATA_BASE + offset as u64)
+        .c_string(DATA_BASE + offset as u32 as u64)
         .and_then(|b| String::from_utf8(b).ok())
         .with_context(|| format!("`{TARGET_EXPORT}` must be a NUL-terminated string"))?;
     sysdefs::target(&name).with_context(|| format!("unknown `{TARGET_EXPORT}` `{name}`"))
@@ -644,39 +574,57 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
-/// Check an imported builtin's wasm signature against its vanilla QuakeC
-/// signature, fixing the types of its handle (`i64`) parameters and result.
-fn check_builtin_sig(tv: &mut TypeVars, b: &sysdefs::Builtin, sig: &Sig) -> Result<()> {
-    if sig.params.len() != b.params.len() {
+/// Whether a wasm value of type `w` can hold a QuakeC value of type `q`.
+fn compatible(w: Type, q: QcType) -> bool {
+    match w {
+        Type::F32 => q == QcType::Float,
+        Type::V128 => q == QcType::Vector,
+        Type::I32 => !matches!(q, QcType::Vector | QcType::Entity | QcType::Void),
+        Type::I64 => matches!(q, QcType::Entity | QcType::String) || q.name().starts_with('.'),
+        _ => false,
+    }
+}
+
+/// Check an imported builtin's wasm signature against its QuakeC signature.
+fn check_builtin_sig(b: &sysdefs::Builtin, params: &[Type], rets: &[Type]) -> Result<()> {
+    if params.len() != b.params.len() {
         bail!(
             "expected {} parameters, but the import has {}",
             b.params.len(),
-            sig.params.len()
+            params.len()
         );
     }
-    let slots = sig.params.iter().zip(b.params).map(|(&w, &q)| (w, q));
-    for (i, (wasm, qc)) in slots.chain(std::iter::once((sig.ret, b.ret))).enumerate() {
-        let what = if i < b.params.len() {
-            format!("parameter {i}")
-        } else {
-            "return type".into()
-        };
-        let ok = match (wasm, qc) {
-            (Ty::Known(w), q) => w == q,
-            // A handle: entity, string or field.
-            (Ty::Var(_), QcType::Entity | QcType::String | QcType::StringField) => {
-                tv.unify(wasm, Ty::Known(qc), &format!("builtin `{}` {what}", b.name));
-                true
-            }
-            (Ty::Var(_), _) => false,
-        };
-        if !ok {
-            let found = match wasm {
-                Ty::Known(w) => w.name().to_string(),
-                Ty::Var(_) => "an i64 handle".into(),
-            };
-            bail!("{what} should be {}, but the import has {found}", qc.name());
-        }
+    for (i, (&w, &q)) in params.iter().zip(b.params).enumerate() {
+        ensure!(
+            compatible(w, q),
+            "parameter {i} should be {}, but the import has {}",
+            q.name(),
+            describe_type(w)
+        );
+    }
+    match (rets, b.ret) {
+        ([], QcType::Void) => {}
+        ([w], q) if compatible(*w, q) => {}
+        ([w], q) => bail!(
+            "return type should be {}, but the import returns {}",
+            q.name(),
+            describe_type(*w)
+        ),
+        (rets, q) => bail!(
+            "return type should be {}, but the import returns {} values",
+            q.name(),
+            rets.len()
+        ),
     }
     Ok(())
+}
+
+fn describe_type(t: Type) -> String {
+    match t {
+        Type::I32 => "an i32".into(),
+        Type::I64 => "an i64 handle".into(),
+        Type::F32 => "an f32".into(),
+        Type::V128 => "a v128".into(),
+        t => format!("{t:?}"),
+    }
 }

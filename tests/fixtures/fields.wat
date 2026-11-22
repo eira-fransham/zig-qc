@@ -1,15 +1,15 @@
 (module
   (import "env" "memory" (memory 0))
   (import "env" "__quakec_load_entity" (func $load_entity (param i32) (result i64)))
-  (import "env" "__quakec_load_fn" (func $load_fn (param i32) (result funcref)))
+  (import "env" "__quakec_load_fn" (func $load_fn (param i32) (result i32)))
   (import "env" "__quakec_load_entity_field_float" (func $load_float (param i64 i32) (result f32)))
   (import "env" "__quakec_store_entity_field_float" (func $store_float (param i64 i32 f32)))
   (import "env" "__quakec_store_entity_field_vector" (func $store_vector (param i64 i32 v128)))
-  (import "env" "__quakec_store_entity_field_fn" (func $store_fn (param i64 i32 funcref)))
+  (import "env" "__quakec_store_entity_field_fn" (func $store_fn (param i64 i32 i32)))
   (import "env" "__quakec_load_entity_field_string" (func $load_string (param i64 i32) (result i64)))
-  (table $__funcref_call_table 1 funcref)
-  (export "__funcref_call_table" (table $__funcref_call_table))
-  (elem declare func $think)
+  (import "env" "__indirect_function_table" (table $t 1 funcref))
+  (import "env" "__table_base" (global $tb i32))
+  (elem (global.get $tb) func $think)
   (func $think)
   ;; Float access to a vector component offset (origin_y = 11), on `self`.
   (func (export "bump_origin_y")
@@ -18,12 +18,11 @@
   ;; Splat into a vector field; a named function into a function field.
   (func (export "reset") (param $e i64) (param $x f32)
     (call $store_vector (local.get $e) (i32.const 19) (f32x4.splat (local.get $x)))
-    (call $store_fn (local.get $e) (i32.const 44) (ref.func $think)))
+    (call $store_fn (local.get $e) (i32.const 44) (i32.add (global.get $tb) (i32.const 0))))
   ;; The entity parameter's type comes from the field access; the string
   ;; result's from the field type.
   (func (export "get_classname") (param $e i64) (result i64)
     (call $load_string (local.get $e) (i32.const 28)))
-  ;; Tail call through the call table.
+  ;; Tail call of a function value.
   (func (export "call_main") (result f32)
-    (table.set $__funcref_call_table (i32.const 0) (call $load_fn (i32.const 328)))
-    (return_call_indirect $__funcref_call_table (result f32) (i32.const 0))))
+    (return_call_indirect $t (result f32) (call $load_fn (i32.const 328)))))

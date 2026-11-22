@@ -9,16 +9,6 @@ const std = @import("std");
 /// Tells the converter to use the QuakeWorld system defs.
 pub export const __quakec_target: [10:0]u8 = "quakeworld".*;
 
-// HACK: Workaround for some jankiness with LLVM.
-comptime {
-    asm (
-        \\.globl __funcref_call_table
-        \\.weak __funcref_call_table
-        \\.tabletype __funcref_call_table, funcref, 1
-        \\__funcref_call_table:
-    );
-}
-
 /// The QuakeWorld system entity fields (`entvars_t`), named as in
 /// `qw-qc/defs.qc`. Each value is the field's QuakeC field offset, which is
 /// what the field intrinsics below pass to the converter. Vector fields take
@@ -185,10 +175,12 @@ pub const String = enum(u64) {
     }
 
     /// A string literal, e.g. `String.lit("progs/player.mdl")`. The bytes
-    /// are placed in static data and the converter emits a QuakeC `"..."`.
+    /// are placed in static data (NUL-terminated) and the converter emits a
+    /// QuakeC `"..."`.
     pub inline fn lit(comptime s: []const u8) String {
         if (!NoNul(s).ok) @compileError("QuakeC strings can't contain NUL bytes");
-        return __quakec_string_literal(s.ptr, s.len);
+        const z = comptime (s ++ "\x00")[0..s.len :0];
+        return __quakec_string_literal(z);
     }
 };
 
@@ -219,8 +211,10 @@ pub fn EntityField(comptime T: type) type {
     };
 }
 
-/// A QuakeC function value (`void()`), as stored in globals and fields.
-pub const Function = *addrspace(.funcref) const fn () callconv(.{ .wasm_mvp = .{} }) void;
+/// A QuakeC function value (`void()`), as stored in globals and fields. In
+/// wasm this is a plain function pointer (a table index); the converter
+/// turns it back into a QuakeC function.
+pub const Function = *const fn () callconv(.c) void;
 
 /// A user-defined entity field `.T name`, which the converter declares. See
 /// `userField`.
@@ -264,12 +258,12 @@ pub inline fn fieldRef(comptime field: anytype) EntityField(String) {
 /// calling convention. Functions taking parameters can be stored too, and
 /// called with `callAs`.
 pub inline fn func(comptime f: anytype) Function {
-    return __quakec_func_ref(@ptrCast(&f));
+    return @ptrCast(&f);
 }
 
 /// View a function value as a function of type `F` (e.g.
 /// `fn (Entity, f32) callconv(.c) void`) so that it can be called.
-pub inline fn callAs(comptime F: type, f: Function) *addrspace(.funcref) const F {
+pub inline fn callAs(comptime F: type, f: Function) *const F {
     return @ptrCast(f);
 }
 
@@ -315,7 +309,6 @@ extern fn __quakec_not_vector(v: Vector) bool;
 extern fn __quakec_dot_vector(a: Vector, b: Vector) f32;
 
 extern fn __quakec_field_ref_string(field: u32) EntityField(String);
-extern fn __quakec_func_ref(f: *const anyopaque) Function;
 extern fn __quakec_eq_fn(a: Function, b: Function) bool;
 extern fn __quakec_ne_fn(a: Function, b: Function) bool;
 extern fn __quakec_not_fn(f: Function) bool;
@@ -344,9 +337,9 @@ extern fn __quakec_eq_string(a: String, b: String) bool;
 extern fn __quakec_ne_string(a: String, b: String) bool;
 extern fn __quakec_not_string(s: String) bool;
 
-// A string literal. `ptr` must be a constant address in static data and `len`
-// a constant; the converter reads the bytes and emits a QuakeC literal.
-extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) String;
+// A string literal. `ptr` must be the constant address of a NUL-terminated
+// string in static data; the converter reads it and emits a QuakeC literal.
+extern fn __quakec_string_literal(ptr: [*:0]const u8) String;
 
 // Globals. `ptr` is `slot * 4` for system globals, or the address of the
 // name of a user global (see `userGlobal`).
@@ -366,7 +359,7 @@ extern fn __quakec_store_fn(ptr: *const anyopaque, value: Function) void;
 /// float), `Vector`, `Entity`, `String`, or a function type.
 pub fn Global(comptime T: type) type {
     const Ty = switch (@typeInfo(T)) {
-        .@"fn" => *addrspace(.funcref) const T,
+        .@"fn" => *const T,
         else => T,
     };
 

@@ -7,6 +7,7 @@ default-run = "wasm-to-qc"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+waffle = "0.4"
 walrus = "0.26"
 
 [dev-dependencies]

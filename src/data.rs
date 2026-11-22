@@ -10,8 +10,7 @@
 use std::ops::Range;
 
 use anyhow::{Result, bail};
-use walrus::ir::{ExtendedLoad, LoadKind};
-use walrus::{ConstExpr, ConstOp, GlobalId, Module};
+use waffle::Operator;
 
 use crate::qc::{BinOp, Expr, Function, QcType, Stmt, Ty};
 
@@ -31,25 +30,15 @@ pub enum DataKind {
 }
 
 impl DataKind {
-    pub fn from_load(kind: LoadKind) -> Option<Self> {
-        let signed = |k: ExtendedLoad| matches!(k, ExtendedLoad::SignExtend);
-        Some(match kind {
-            LoadKind::F32 => Self::F32,
-            LoadKind::I32 { atomic: false } => Self::I32,
-            LoadKind::I32_8 { kind } => {
-                if signed(kind) {
-                    Self::S8
-                } else {
-                    Self::U8
-                }
-            }
-            LoadKind::I32_16 { kind } => {
-                if signed(kind) {
-                    Self::S16
-                } else {
-                    Self::U16
-                }
-            }
+    /// The kind of a load operator, and its constant offset.
+    pub fn from_load(op: &Operator) -> Option<(Self, u64)> {
+        Some(match op {
+            Operator::F32Load { memory } => (Self::F32, memory.offset as u64),
+            Operator::I32Load { memory } => (Self::I32, memory.offset as u64),
+            Operator::I32Load8S { memory } => (Self::S8, memory.offset as u64),
+            Operator::I32Load8U { memory } => (Self::U8, memory.offset as u64),
+            Operator::I32Load16S { memory } => (Self::S16, memory.offset as u64),
+            Operator::I32Load16U { memory } => (Self::U16, memory.offset as u64),
             _ => return None,
         })
     }
@@ -96,22 +85,20 @@ pub struct StaticData {
 }
 
 impl StaticData {
-    /// Collect the module's data segments. They must all be active segments
-    /// placed relative to `memory_base`.
-    pub fn from_module(module: &Module, memory_base: Option<GlobalId>) -> Result<Self> {
+    /// Collect the module's data segments: `(absolute address, bytes)`. They
+    /// must all be placed at or after [`DATA_BASE`].
+    pub fn from_segments(segments: &[(u64, &[u8])]) -> Result<Self> {
         let mut bytes = Vec::new();
-        for seg in module.data.iter() {
-            let walrus::DataKind::Active { offset, .. } = &seg.kind else {
-                bail!("passive data segments are not supported");
+        for &(addr, value) in segments {
+            let Some(offset) = addr.checked_sub(DATA_BASE) else {
+                bail!("data segment at address {addr} is not relative to `__memory_base`");
             };
-            let Some(offset) = relative_offset(offset, memory_base) else {
-                bail!("data segment at {offset:?} is not relative to `__memory_base`");
-            };
-            let end = offset + seg.value.len();
+            let offset = offset as usize;
+            let end = offset + value.len();
             if bytes.len() < end {
                 bytes.resize(end, 0);
             }
-            bytes[offset..end].copy_from_slice(&seg.value);
+            bytes[offset..end].copy_from_slice(value);
         }
         if DATA_BASE + bytes.len() as u64 >= 1 << 24 {
             bail!("too much static data ({} bytes)", bytes.len());
@@ -207,23 +194,5 @@ fn search(entries: &[(f32, f32)]) -> Vec<Stmt> {
         (lo, hi) if hi.is_empty() => vec![Stmt::If(Expr::Bin(BinOp::Lt, addr(), mid), lo, vec![])],
         (lo, hi) if lo.is_empty() => vec![Stmt::If(Expr::Bin(BinOp::Ge, addr(), mid), hi, vec![])],
         (lo, hi) => vec![Stmt::If(Expr::Bin(BinOp::Lt, addr(), mid), lo, hi)],
-    }
-}
-
-/// The offset of a data segment relative to `__memory_base`.
-pub fn relative_offset(offset: &ConstExpr, memory_base: Option<GlobalId>) -> Option<usize> {
-    let base = memory_base?;
-    match offset {
-        ConstExpr::Global(g) if *g == base => Some(0),
-        ConstExpr::Extended(ops) => match ops.as_slice() {
-            [ConstOp::GlobalGet(g), ConstOp::I32Const(c), ConstOp::I32Add]
-            | [ConstOp::I32Const(c), ConstOp::GlobalGet(g), ConstOp::I32Add]
-                if *g == base =>
-            {
-                usize::try_from(*c).ok()
-            }
-            _ => None,
-        },
-        _ => None,
     }
 }

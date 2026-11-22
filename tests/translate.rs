@@ -148,14 +148,13 @@ fn field_errors() {
         err.contains("entity field offset 105 is not a known float field"),
         "{err}"
     );
-    // A non-constant offset.
+    // A computed offset.
     let err = translate_err(&format!(
-        r#"(module {load} (func (export "f") (param i64 i32) (result f32) (call 0 (local.get 0) (local.get 1))))"#
+        r#"(module {load} (func (export "f") (param i64 i32) (result f32)
+            (call 0 (local.get 0) (i32.mul (local.get 1) (i32.const 3)))))"#
     ));
-    assert!(
-        err.contains("entity field offset must be a compile-time constant"),
-        "{err}"
-    );
+    assert!(err.contains("type conflict"), "{err}");
+    assert!(err.contains("as .float"), "{err}");
 }
 
 #[test]
@@ -223,26 +222,27 @@ fn string_literals() {
 #[test]
 fn string_literal_errors() {
     let base = r#"(import "env" "memory" (memory 1)) (import "env" "__memory_base" (global $b i32))
-        (import "env" "__quakec_string_literal" (func $lit (param i32 i32) (result i64)))
+        (import "env" "__quakec_string_literal" (func $lit (param i32) (result i64)))
         (data (global.get $b) "abcd")"#;
+    // A computed address.
     let err = translate_err(&format!(
         r#"(module {base} (func (export "f") (param i32) (result i64)
-            (call $lit (i32.add (global.get $b) (local.get 0)) (i32.const 1))))"#
+            (call $lit (i32.mul (local.get 0) (i32.const 2)))))"#
     ));
-    assert!(
-        err.contains("string literal address is not a constant"),
-        "{err}"
-    );
-    let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (param i32) (result i64)
-            (call $lit (global.get $b) (local.get 0))))"#
-    ));
-    assert!(err.contains("string literal length"), "{err}");
+    assert!(err.contains("type conflict"), "{err}");
+    assert!(err.contains("as string"), "{err}");
+    // No NUL terminator.
     let err = translate_err(&format!(
         r#"(module {base} (func (export "f") (result i64)
-            (call $lit (global.get $b) (i32.const 5))))"#
+            (call $lit (global.get $b))))"#
     ));
-    assert!(err.contains("outside of static data"), "{err}");
+    assert!(err.contains("not a NUL-terminated string"), "{err}");
+    // Outside of static data.
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f") (result i64)
+            (call $lit (i32.add (global.get $b) (i32.const 10)))))"#
+    ));
+    assert!(err.contains("not a NUL-terminated string"), "{err}");
 }
 
 #[test]
@@ -264,61 +264,75 @@ fn merged_functions() {
 }
 
 #[test]
-fn merged_function_errors() {
-    let base = r#"(import "env" "__indirect_function_table" (table 1 funcref))
+fn polymorphic() {
+    insta::assert_snapshot!(translate_wat("polymorphic.wat"));
+    check_compiles(&wat::parse_file(fixture("polymorphic.wat")).unwrap(), "");
+}
+
+#[test]
+fn function_pointer_errors() {
+    let base = r#"(import "env" "__indirect_function_table" (table 2 funcref))
         (import "env" "__table_base" (global $tb i32))
-        (import "env" "__quakec_func_ref" (func $func_ref (param i32) (result funcref)))
-        (elem (global.get $tb) func $a)
-        (func $a)
-        (func $use (param i32) (result funcref) (call $func_ref (local.get 0)))"#;
-    // A caller passing a computed function pointer.
+        (import "env" "__quakec_load_entity" (func $self (param i32) (result i64)))
+        (import "env" "__quakec_store_entity_field_fn" (func $set (param i64 i32 i32)))
+        (elem (global.get $tb) func $a $a)
+        (func $a)"#;
+    // A computed function pointer.
     let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (param i32) (result funcref)
-            (call $use (i32.mul (local.get 0) (i32.const 2)))))"#
+        r#"(module {base} (func (export "f") (param i32)
+            (call $set (call $self (i32.const 112)) (i32.const 44)
+              (i32.mul (local.get 0) (i32.const 2)))))"#
     ));
-    assert!(err.contains("in argument 0 of `__wasm_use`"), "{err}");
-    assert!(err.contains("is not a constant"), "{err}");
-    // A parameter also used as a number isn't retyped.
+    assert!(err.contains("type conflict"), "{err}");
+    assert!(err.contains("as void()"), "{err}");
+    // The same value used as two different functions.
     let err = translate_err(&format!(
-        r#"(module {base}
-            (func $g (param i32) (result funcref)
-              (drop (i32.mul (local.get 0) (i32.const 2)))
-              (call $func_ref (local.get 0)))
-            (func (export "f") (result funcref) (call $g (global.get $tb))))"#
+        r#"(module {base} (func (export "f") (param i32)
+            (call $set (call $self (i32.const 112)) (i32.const 44) (local.get 0))
+            (call $set (call $self (i32.const 112)) (i32.const 44)
+              (i32.add (local.get 0) (i32.const 1)))))"#
     ));
     assert!(
-        err.contains("function pointer in local `p0` is not a constant on every path here"),
+        err.contains("void() values are used at different offsets"),
+        "{err}"
+    );
+    // An offset that changes in a loop.
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f") (param i32) (local i32)
+            (loop
+              (local.set 1 (i32.add (local.get 1) (i32.const 1)))
+              (br_if 0 (local.get 0)))
+            (call $set (call $self (i32.const 112)) (i32.const 44) (local.get 1))))"#
+    ));
+    assert!(err.contains("inconsistent offsets"), "{err}");
+    // Not in the table.
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f")
+            (call $set (call $self (i32.const 112)) (i32.const 44) (i32.const 5))))"#
+    ));
+    assert!(
+        err.contains("function pointer 5 is not in the function table"),
         "{err}"
     );
 }
 
 #[test]
-fn merged_constant_errors() {
-    let base = r#"(import "env" "__indirect_function_table" (table 1 funcref))
-        (import "env" "__table_base" (global $tb i32))
-        (import "env" "__quakec_func_ref" (func $func_ref (param i32) (result funcref)))
-        (elem (global.get $tb) func $a)
-        (func $a)"#;
-    // A function pointer passed in from the caller.
+fn global_address_errors() {
+    let base = r#"(import "env" "__quakec_load_float" (func $load (param i32) (result f32)))"#;
     let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (param i32) (result funcref)
-            (call $func_ref (local.get 0))))"#
+        r#"(module {base} (func (export "f") (param i32) (result f32)
+            (call $load (local.get 0))))"#
     ));
     assert!(
-        err.contains("function pointer in local `p0` is not a constant on every path here"),
+        err.contains("address of QuakeC global is not a constant"),
         "{err}"
     );
-    // A local that is sometimes assigned a computed value.
+    // One of several constants, chosen at run time: each must be a global.
     let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (param i32) (result funcref) (local i32)
-            (local.set 1 (global.get $tb))
-            (if (local.get 0) (then (local.set 1 (i32.mul (local.get 0) (i32.const 2)))))
-            (call $func_ref (local.get 1))))"#
+        r#"(module {base} (func (export "f") (param i32) (result f32)
+            (call $load (select (i32.const 124) (i32.const 4) (local.get 0)))))"#
     ));
-    assert!(
-        err.contains("function pointer in local `l0` is not a constant on every path here"),
-        "{err}"
-    );
+    assert!(err.contains("memory address 4"), "{err}");
 }
 
 #[test]

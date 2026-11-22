@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 /// A concrete QuakeC type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum QcType {
     Void,
     Float,
