@@ -14,11 +14,11 @@ use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use waffle::entity::EntityRef;
 use waffle::{Block, Func, FunctionBody, Operator, Terminator, Type, Value, ValueDef};
 
+use crate::alloc;
 use crate::data::{DataKind, StaticData};
 use crate::infer::{
     self, Infer, Instance, Kind, Site, TERM_COND, args, const_val, targets, term_arg, term_ret,
 };
-use crate::alloc;
 use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
 use crate::translate::{Ctx, FuncKind, Intrinsic};
 
@@ -48,6 +48,9 @@ struct Emitter<'a, 'm> {
     rec: HashMap<Block, Rec>,
     /// Whether the terminator is being emitted.
     in_term: bool,
+    /// Variable shifts that are only used by a bit test (see `bit_test`),
+    /// emitted as part of it.
+    bit_tests: HashSet<Value>,
 }
 
 /// An edge copy: destination, plain source local, locals read.
@@ -92,6 +95,7 @@ pub fn emit(
         gotos: HashSet::new(),
         rec: HashMap::new(),
         in_term: false,
+        bit_tests: HashSet::new(),
     };
     let f = e.function()?;
     Ok(((inst.func, i), f))
@@ -130,15 +134,17 @@ impl Emitter<'_, '_> {
                 if const_val(body, v).is_some() || const_expr(body, v).is_some() {
                     continue;
                 }
-                self.inst(v).with_context(|| {
-                    format!("at {v} = {} (in {b})", infer::describe(body, v))
-                })?;
+                self.inst(v)
+                    .with_context(|| format!("at {v} = {} (in {b})", infer::describe(body, v)))?;
             }
             let next = order.get(i + 1).copied();
             self.in_term = true;
             self.terminator(b, next)
                 .with_context(|| format!("at the end of {b}"))?;
-            ensure!(self.pending.is_empty(), "values left unused at the end of {b}");
+            ensure!(
+                self.pending.is_empty(),
+                "values left unused at the end of {b}"
+            );
         }
 
         // Only keep labels that are jumped to.
@@ -162,6 +168,21 @@ impl Emitter<'_, '_> {
     }
 
     fn count_uses(&mut self) {
+        self.count_value_uses();
+        // Shifts only used by a bit test.
+        let body = self.body;
+        for (_, def) in body.blocks.entries() {
+            for &v in &def.insts {
+                if let Some((s, ..)) = bit_test(body, v)
+                    && self.uses.get(&s).is_some_and(|&(n, _)| n == 1)
+                {
+                    self.bit_tests.insert(s);
+                }
+            }
+        }
+    }
+
+    fn count_value_uses(&mut self) {
         let body = self.body;
         let add = |uses: &mut HashMap<Value, (usize, Block)>, v: Value, b: Block| {
             let v = body.resolve_alias(v);
@@ -268,16 +289,25 @@ impl Emitter<'_, '_> {
         let mut index: HashMap<String, usize> = HashMap::new();
         for (n, ty) in params {
             index.insert(n.clone(), vars.len());
-            vars.push(alloc::Var { ty: *ty, param: true });
+            vars.push(alloc::Var {
+                ty: *ty,
+                param: true,
+            });
         }
-        let (values, temps): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut self.locals).into_iter().partition(|(n, _)| n.starts_with('v'));
+        let (values, temps): (Vec<_>, Vec<_>) = std::mem::take(&mut self.locals)
+            .into_iter()
+            .partition(|(n, _)| n.starts_with('v'));
         for (n, ty) in &values {
             index.insert(n.clone(), vars.len());
-            vars.push(alloc::Var { ty: *ty, param: false });
+            vars.push(alloc::Var {
+                ty: *ty,
+                param: false,
+            });
         }
         let pos: HashMap<Block, usize> = order.iter().enumerate().map(|(i, &b)| (b, i)).collect();
-        let ids = |ns: &[String]| -> Vec<usize> { ns.iter().filter_map(|n| index.get(n).copied()).collect() };
+        let ids = |ns: &[String]| -> Vec<usize> {
+            ns.iter().filter_map(|n| index.get(n).copied()).collect()
+        };
         let blocks: Vec<alloc::Block> = order
             .iter()
             .map(|b| {
@@ -288,7 +318,11 @@ impl Emitter<'_, '_> {
                         .iter()
                         .filter_map(|(def, n)| {
                             let &i = index.get(n)?;
-                            Some(if *def { alloc::Event::Def(i) } else { alloc::Event::Use(i) })
+                            Some(if *def {
+                                alloc::Event::Def(i)
+                            } else {
+                                alloc::Event::Use(i)
+                            })
                         })
                         .collect(),
                     term_uses: ids(&rec.term_uses),
@@ -417,7 +451,10 @@ impl Emitter<'_, '_> {
             }
             Kind::Func => {
                 let Some(&f) = self.ctx.table_funcs.get(&(addr as u64)) else {
-                    ensure!(addr == 0, "function pointer {addr} is not in the function table");
+                    ensure!(
+                        addr == 0,
+                        "function pointer {addr} is not in the function table"
+                    );
                     return Ok(Expr::Null);
                 };
                 Ok(self.func_value(f))
@@ -517,9 +554,7 @@ impl Emitter<'_, '_> {
     fn global_ref(&mut self, e: Expr, v: Value, t: QcType) -> Result<Expr> {
         match e {
             Expr::Float(a) => Ok(Expr::Global(self.global_at(a as i64, t)?)),
-            Expr::Select(c, a, b)
-                if matches!((&*a, &*b), (Expr::Float(_), Expr::Float(_))) =>
-            {
+            Expr::Select(c, a, b) if matches!((&*a, &*b), (Expr::Float(_), Expr::Float(_))) => {
                 let (a, b) = (self.global_ref(*a, v, t)?, self.global_ref(*b, v, t)?);
                 Ok(Expr::Select(c, Box::new(a), Box::new(b)))
             }
@@ -540,7 +575,10 @@ impl Emitter<'_, '_> {
                         arms.push(Expr::Global(g));
                     }
                 }
-                ensure!(!arms.is_empty(), "no value of `{e:?}` is a QuakeC global address");
+                ensure!(
+                    !arms.is_empty(),
+                    "no value of `{e:?}` is a QuakeC global address"
+                );
                 let e = self.simple(e, QcType::Float);
                 Ok(select_chain(&e, &good, arms))
             }
@@ -642,7 +680,11 @@ impl Emitter<'_, '_> {
                 if k == Kind::Float {
                     let ops = self.operands(v)?;
                     let [a0, a1] = ops.try_into().unwrap();
-                    let op = if *op == O::I32Add { BinOp::Add } else { BinOp::Sub };
+                    let op = if *op == O::I32Add {
+                        BinOp::Add
+                    } else {
+                        BinOp::Sub
+                    };
                     self.define(v, fold(op, a0, a1))?;
                 } else {
                     ensure!(
@@ -735,7 +777,11 @@ impl Emitter<'_, '_> {
                 let Expr::Float(a) = addr else {
                     bail!("vector loads must be from constant QuakeC global addresses")
                 };
-                let n = if matches!(op, O::V128Load32Zero { .. }) { 1 } else { 2 };
+                let n = if matches!(op, O::V128Load32Zero { .. }) {
+                    1
+                } else {
+                    2
+                };
                 let mut parts = [Expr::Float(0.0), Expr::Float(0.0), Expr::Float(0.0)];
                 for (i, p) in parts.iter_mut().enumerate().take(n) {
                     let at = a as i64 + memory.offset as i64 + 4 * i as i64;
@@ -748,7 +794,8 @@ impl Emitter<'_, '_> {
                 let Expr::Float(a) = addr else {
                     bail!("vector loads must be from constant QuakeC global addresses")
                 };
-                let x = Expr::Global(self.global_at(a as i64 + memory.offset as i64, QcType::Float)?);
+                let x =
+                    Expr::Global(self.global_at(a as i64 + memory.offset as i64, QcType::Float)?);
                 let e = self.replace_lane(vec, *lane, x);
                 self.define(v, e)?;
             }
@@ -784,10 +831,13 @@ impl Emitter<'_, '_> {
                 let e = self.lanewise(op, a, b);
                 self.define(v, e)?;
             }
-            // On a mask (see `lanewise`).
+            // Bitwise not on integer lanes (including masks, see
+            // `lanewise`): `-1 - x`.
             O::V128Not => {
                 let [m]: [Expr; 1] = self.operands(v)?.try_into().unwrap();
-                let parts = self.vector_lanes(m).map(not);
+                let parts = self
+                    .vector_lanes(m)
+                    .map(|x| fold(BinOp::Sub, Expr::Float(-1.0), x));
                 self.define(v, Expr::MakeVector(Box::new(parts)))?;
             }
             // `m ? a : b` lane by lane, for a mask `m` (see `lanewise`).
@@ -813,7 +863,11 @@ impl Emitter<'_, '_> {
             O::F32x4Add | O::F32x4Sub => {
                 let [a, b]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
                 let (a, b) = (self.materialize(a), self.materialize(b));
-                let op = if *op == O::F32x4Add { BinOp::Add } else { BinOp::Sub };
+                let op = if *op == O::F32x4Add {
+                    BinOp::Add
+                } else {
+                    BinOp::Sub
+                };
                 self.define(v, Expr::Bin(op, Box::new(a), Box::new(b)))?;
             }
             O::F32x4Splat => {
@@ -848,6 +902,141 @@ impl Emitter<'_, '_> {
             O::F32ConvertI32S | O::F32ConvertI32U => {
                 let [x]: [Expr; 1] = self.operands(v)?.try_into().unwrap();
                 self.define(v, x)?;
+            }
+            // Emitted as part of the bit test using it.
+            O::I32Shl | O::I32ShrU if self.bit_tests.contains(&v) => {}
+            O::I32And if bit_test(body, v).is_some_and(|(s, ..)| self.bit_tests.contains(&s)) => {
+                let (s, x, mask, shl) = bit_test(body, v).unwrap();
+                let x = self.operand(Site::Inst(s), 1, x)?;
+                let x = self.simple(x, QcType::Float);
+                // `(1 << x) & mask` is `2^x` if bit `x` of `mask` is set, and
+                // `(mask >> x) & 1` is 1; both are 0 otherwise.
+                let mut e = Expr::Float(0.0);
+                for bit in (0..32).rev().filter(|b| mask & (1 << b) != 0) {
+                    let val = if shl { (1u64 << bit) as f32 } else { 1.0 };
+                    let is = Expr::Bin(
+                        BinOp::Eq,
+                        Box::new(x.clone()),
+                        Box::new(Expr::Float(bit as f32)),
+                    );
+                    e = Expr::Select(Box::new(is), Box::new(Expr::Float(val)), Box::new(e));
+                }
+                self.define(v, e)?;
+            }
+            // Integer division truncates toward zero, as `OP_BITOR` does
+            // (see the truncation above). Exact for magnitudes below 2^24.
+            O::I32DivS | O::I32DivU | O::I32RemS | O::I32RemU => {
+                let [a, b]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let rem = matches!(op, O::I32RemS | O::I32RemU);
+                if let (Expr::Float(x), Expr::Float(y)) = (&a, &b) {
+                    let (x, y) = (*x as i64, *y as i64);
+                    ensure!(y != 0, "integer division by zero");
+                    let r = if rem { x % y } else { x / y };
+                    self.define(v, Expr::Float(r as f32))?;
+                    return Ok(());
+                }
+                // Operands used twice are evaluated once (constants can be
+                // repeated).
+                let once = |this: &mut Self, e: Expr| match e {
+                    e @ Expr::Float(_) => e,
+                    e if rem => this.simple(e, QcType::Float),
+                    e => e,
+                };
+                let a = once(self, a);
+                let b = once(self, b);
+                let q = Expr::Bin(BinOp::Div, Box::new(a.clone()), Box::new(b.clone()));
+                let q = self.simple(q, QcType::Float);
+                let q = Expr::Bin(BinOp::BitOr, Box::new(q.clone()), Box::new(q));
+                let e = if rem {
+                    Expr::Bin(
+                        BinOp::Sub,
+                        Box::new(a),
+                        Box::new(Expr::Bin(BinOp::Mul, Box::new(b), Box::new(q))),
+                    )
+                } else {
+                    q
+                };
+                self.define(v, e)?;
+            }
+            O::I32x4Eq
+            | O::I32x4Ne
+            | O::I32x4LtS
+            | O::I32x4LtU
+            | O::I32x4GtS
+            | O::I32x4GtU
+            | O::I32x4LeS
+            | O::I32x4LeU
+            | O::I32x4GeS
+            | O::I32x4GeU => {
+                let [a, b]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let e = self.lanewise(op, a, b);
+                self.define(v, e)?;
+            }
+            O::I32x4Add | O::I32x4Sub => {
+                let [a, b]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let (a, b) = (self.materialize(a), self.materialize(b));
+                let op = if *op == O::I32x4Add {
+                    BinOp::Add
+                } else {
+                    BinOp::Sub
+                };
+                self.define(v, fold_vector(op, a, b))?;
+            }
+            O::I32x4Mul => {
+                let [a, b]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let e = self.lanes2(a, b, |x, y| fold(BinOp::Mul, x, y));
+                self.define(v, e)?;
+            }
+            O::I32x4Neg => {
+                let [x]: [Expr; 1] = self.operands(v)?.try_into().unwrap();
+                let parts = self
+                    .vector_lanes(x)
+                    .map(|x| fold(BinOp::Sub, Expr::Float(0.0), x));
+                self.define(v, Expr::MakeVector(Box::new(parts)))?;
+            }
+            O::I32x4Shl => {
+                let [a, k]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let Expr::Float(k) = k else {
+                    bail!("unsupported i32x4.shl by a non-constant amount")
+                };
+                let m = Expr::Float((1u64 << (k as u32 & 31)) as f32);
+                let parts = self.vector_lanes(a).map(|x| fold(BinOp::Mul, x, m.clone()));
+                self.define(v, Expr::MakeVector(Box::new(parts)))?;
+            }
+            O::I32x4Splat => {
+                let [x]: [Expr; 1] = self.operands(v)?.try_into().unwrap();
+                let e = self.splat(x);
+                self.define(v, e)?;
+            }
+            O::I32x4ReplaceLane { lane } => {
+                let [vec, x]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let e = self.replace_lane(vec, *lane, x);
+                self.define(v, e)?;
+            }
+            // With a mask, a lane-wise `select`, which is exact for floats
+            // too. Otherwise on integer lanes.
+            O::V128And | O::V128Or | O::V128AndNot => {
+                let a = args(body, v);
+                let (ma, mb) = (is_mask(body, a[0]), is_mask(body, a[1]));
+                let [x, y]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                let sel =
+                    |c: Expr, t: Expr, f: Expr| Expr::Select(Box::new(c), Box::new(t), Box::new(f));
+                let all = Expr::Float(-1.0);
+                let zero = Expr::Float(0.0);
+                let e = match (op, ma, mb) {
+                    (O::V128And, _, true) => self.lanes2(x, y, |x, m| sel(m, x, zero.clone())),
+                    (O::V128And, true, false) => self.lanes2(x, y, |m, x| sel(m, x, zero.clone())),
+                    (O::V128Or, _, true) => self.lanes2(x, y, |x, m| sel(m, all.clone(), x)),
+                    (O::V128Or, true, false) => self.lanes2(x, y, |m, x| sel(m, all.clone(), x)),
+                    // `x & !m`
+                    (O::V128AndNot, _, true) => self.lanes2(x, y, |x, m| sel(m, zero.clone(), x)),
+                    (O::V128And, ..) => self.lanes2(x, y, |x, y| fold(BinOp::BitAnd, x, y)),
+                    (O::V128Or, ..) => self.lanes2(x, y, |x, y| fold(BinOp::BitOr, x, y)),
+                    _ => self.lanes2(x, y, |x, y| {
+                        fold(BinOp::BitAnd, x, fold(BinOp::Sub, Expr::Float(-1.0), y))
+                    }),
+                };
+                self.define(v, e)?;
             }
             op => {
                 let [a, b]: [Expr; 2] = match self.operands(v)?.try_into() {
@@ -918,7 +1107,10 @@ impl Emitter<'_, '_> {
         } else {
             fold(BinOp::Add, addr, Expr::Float(offset as f32))
         };
-        let call = Expr::Call(Box::new(Expr::FuncName(dk.accessor_name().into())), vec![addr]);
+        let call = Expr::Call(
+            Box::new(Expr::FuncName(dk.accessor_name().into())),
+            vec![addr],
+        );
         // Reads only static data: no need to flush.
         let used = self.uses.get(&v).is_some_and(|&(n, _)| n > 0);
         if used {
@@ -1116,7 +1308,10 @@ impl Emitter<'_, '_> {
             let saved = std::mem::take(&mut self.out);
             let e = self.materialize(e);
             let pre = std::mem::replace(&mut self.out, saved);
-            ensure!(pre.is_empty() || k == QcType::Vector, "unexpected statements in an edge copy");
+            ensure!(
+                pre.is_empty() || k == QcType::Vector,
+                "unexpected statements in an edge copy"
+            );
             // Vectors are materialized into temporaries (`pre`) first.
             copies.push((dest, e, k));
             self.emit_all(pre);
@@ -1233,34 +1428,40 @@ impl Emitter<'_, '_> {
         [0, 1, 2].map(|i| self.extract_lane(v.clone(), i))
     }
 
-    /// A lane-wise `f32x4` comparison, `pmin` or `pmax`. LLVM vectorizes runs
-    /// of component comparisons (like bounding box checks). Comparison
-    /// results are masks, represented as vectors with 0 or 1 in each lane
-    /// (wasm uses all-ones lanes, but the masks are only ever used through
-    /// `v128.not`, `v128.bitselect` and `i32x4.extract_lane`, and the code
-    /// LLVM generates only tests their low bit).
+    /// A lane-wise comparison (`f32x4` or `i32x4`), `pmin` or `pmax`. LLVM
+    /// vectorizes runs of component comparisons (like bounding box checks).
+    /// Comparison results are masks: as in wasm, each lane is all ones (-1)
+    /// or 0.
     fn lanewise(&mut self, op: &Operator, a: Expr, b: Expr) -> Expr {
         let (a, b) = (self.vector_lanes(a), self.vector_lanes(b));
         let lane = |x: Expr, y: Expr| {
             let sel =
                 |c: Expr, t: Expr, f: Expr| Expr::Select(Box::new(c), Box::new(t), Box::new(f));
-            let cmp = |op| fold(op, x.clone(), y.clone());
+            // -1 or 0.
+            let cmp = |op| fold(BinOp::Sub, Expr::Float(0.0), fold(op, x.clone(), y.clone()));
             match op {
                 // `pmin(a, b)` is `b < a ? b : a`, `pmax(a, b)` is `a < b ? b : a`.
                 Operator::F32x4PMin => sel(fold(BinOp::Lt, y.clone(), x.clone()), y, x),
-                Operator::F32x4PMax => sel(cmp(BinOp::Lt), y, x),
-                Operator::F32x4Eq => cmp(BinOp::Eq),
-                Operator::F32x4Ne => cmp(BinOp::Ne),
-                Operator::F32x4Lt => cmp(BinOp::Lt),
-                Operator::F32x4Gt => cmp(BinOp::Gt),
-                Operator::F32x4Le => cmp(BinOp::Le),
-                Operator::F32x4Ge => cmp(BinOp::Ge),
+                Operator::F32x4PMax => sel(fold(BinOp::Lt, x.clone(), y.clone()), y, x),
+                Operator::F32x4Eq | Operator::I32x4Eq => cmp(BinOp::Eq),
+                Operator::F32x4Ne | Operator::I32x4Ne => cmp(BinOp::Ne),
+                Operator::F32x4Lt | Operator::I32x4LtS | Operator::I32x4LtU => cmp(BinOp::Lt),
+                Operator::F32x4Gt | Operator::I32x4GtS | Operator::I32x4GtU => cmp(BinOp::Gt),
+                Operator::F32x4Le | Operator::I32x4LeS | Operator::I32x4LeU => cmp(BinOp::Le),
+                Operator::F32x4Ge | Operator::I32x4GeS | Operator::I32x4GeU => cmp(BinOp::Ge),
                 _ => unreachable!("not a lane-wise operator"),
             }
         };
         let [a0, a1, a2] = a;
         let [b0, b1, b2] = b;
         Expr::MakeVector(Box::new([lane(a0, b0), lane(a1, b1), lane(a2, b2)]))
+    }
+
+    /// `f(a_i, b_i)` for each lane.
+    fn lanes2(&mut self, a: Expr, b: Expr, f: impl Fn(Expr, Expr) -> Expr) -> Expr {
+        let [a0, a1, a2] = self.vector_lanes(a);
+        let [b0, b1, b2] = self.vector_lanes(b);
+        Expr::MakeVector(Box::new([f(a0, b0), f(a1, b1), f(a2, b2)]))
     }
 
     /// `i8x16.shuffle` of two vectors. LLVM uses it to splat or rearrange
@@ -1371,7 +1572,20 @@ fn const_expr(body: &FunctionBody, v: Value) -> Option<Result<Expr>> {
             }
         }
         Operator::V128Const { value } => {
-            let lane = |i: u32| f32::from_bits((value >> (32 * i)) as u32);
+            let bits = |i: u32| (value >> (32 * i)) as u32;
+            // Small integers are subnormal floats (or NaNs, if negative),
+            // which no float constant would use: these are integer lanes.
+            let int = (0..4).all(|i| {
+                let (b, f) = (bits(i), f32::from_bits(bits(i)));
+                b == 0 || f.is_subnormal() || (f.is_nan() && (b as i32).unsigned_abs() <= 1 << 24)
+            });
+            let lane = |i: u32| {
+                if int {
+                    bits(i) as i32 as f32
+                } else {
+                    f32::from_bits(bits(i))
+                }
+            };
             let c = [lane(0), lane(1), lane(2)];
             if c.iter().all(|f| f.is_finite()) {
                 Ok(Expr::Vector(c))
@@ -1381,6 +1595,81 @@ fn const_expr(body: &FunctionBody, v: Value) -> Option<Result<Expr>> {
         }
         _ => return None,
     })
+}
+
+/// A bit test `v`: `(1 << x) & mask` or `(mask >> x) & 1`, for a constant
+/// `mask`. Returns the shift, `x`, `mask` and whether it's the first form.
+fn bit_test(body: &FunctionBody, v: Value) -> Option<(Value, Value, u32, bool)> {
+    let ValueDef::Operator(Operator::I32And, _, _) = &body.values[v] else {
+        return None;
+    };
+    let a = args(body, v);
+    let (s, k) = match (const_val(body, a[0]), const_val(body, a[1])) {
+        (None, Some(k)) => (a[0], k),
+        (Some(k), None) => (a[1], k),
+        _ => return None,
+    };
+    let ValueDef::Operator(op @ (Operator::I32Shl | Operator::I32ShrU), _, _) = &body.values[s]
+    else {
+        return None;
+    };
+    let sa = args(body, s);
+    if const_val(body, sa[1]).is_some() {
+        return None;
+    }
+    let c = const_val(body, sa[0])? as u32;
+    match op {
+        Operator::I32Shl if c == 1 => Some((s, sa[1], k as u32, true)),
+        Operator::I32ShrU if k == 1 => Some((s, sa[1], c, false)),
+        _ => None,
+    }
+}
+
+/// Whether `v` is a mask: each lane all ones or 0.
+fn is_mask(body: &FunctionBody, v: Value) -> bool {
+    use Operator as O;
+    let v = body.resolve_alias(v);
+    let ValueDef::Operator(op, _, _) = &body.values[v] else {
+        return false;
+    };
+    match op {
+        O::F32x4Eq
+        | O::F32x4Ne
+        | O::F32x4Lt
+        | O::F32x4Gt
+        | O::F32x4Le
+        | O::F32x4Ge
+        | O::I32x4Eq
+        | O::I32x4Ne
+        | O::I32x4LtS
+        | O::I32x4LtU
+        | O::I32x4GtS
+        | O::I32x4GtU
+        | O::I32x4LeS
+        | O::I32x4LeU
+        | O::I32x4GeS
+        | O::I32x4GeU => true,
+        O::V128Not => is_mask(body, args(body, v)[0]),
+        O::V128And | O::V128Or | O::V128AndNot => {
+            let a = args(body, v);
+            is_mask(body, a[0]) && is_mask(body, a[1])
+        }
+        _ => false,
+    }
+}
+
+/// `a op b` on whole vectors, folding constants.
+fn fold_vector(op: BinOp, a: Expr, b: Expr) -> Expr {
+    match (&a, &b) {
+        (Expr::Vector(x), Expr::Vector(y)) => {
+            let f = |i: usize| match op {
+                BinOp::Add => x[i] + y[i],
+                _ => x[i] - y[i],
+            };
+            Expr::Vector([f(0), f(1), f(2)])
+        }
+        _ => Expr::Bin(op, Box::new(a), Box::new(b)),
+    }
 }
 
 /// Remove `x = x` assignments (left by sharing locals).

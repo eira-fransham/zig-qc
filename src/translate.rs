@@ -226,6 +226,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         if let Some(body) = f.body_mut() {
             crate::prepare::simplify_params(body);
             crate::prepare::merge_blocks(body);
+            crate::prepare::bool_offsets_to_select(body);
         }
     }
     let module = module;

@@ -18,6 +18,8 @@ float pick_time(float p0);
 float reused_local(float p0);
 void br_merge(float p0);
 void loop_forgets(float p0);
+void bool_offset(float p0);
+float bool_offset_number(float p0);
 
 void __wasm_a() {
 }
@@ -88,4 +90,12 @@ b2:
         goto b2;
     }
     self.think = __wasm_b;
+}
+
+void bool_offset(float p0) {
+    self.think = ((p0 != 0) ? __wasm_b : __wasm_a);
+}
+
+float bool_offset_number(float p0) {
+    return (!(p0) ? 4 : 5);
 }

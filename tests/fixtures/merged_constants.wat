@@ -68,4 +68,12 @@
       (local.set $f (i32.add (global.get $tb) (i32.const 1)))
       (br_if 0 (local.get $c)))
     (call $store_fn (call $load_entity (i32.const 112)) (i32.const 44)
-      (local.get $f))))
+      (local.get $f)))
+  ;; `c ? b : a` for adjacent functions, as the table base plus a comparison
+  ;; result.
+  (func (export "bool_offset") (param $c f32)
+    (call $store_fn (call $load_entity (i32.const 112)) (i32.const 44)
+      (i32.add (global.get $tb) (f32.ne (local.get $c) (f32.const 0)))))
+  ;; The same with a number: `5 - (x == 0)`.
+  (func (export "bool_offset_number") (param $x i32) (result i32)
+    (i32.sub (i32.const 5) (i32.eqz (local.get $x)))))

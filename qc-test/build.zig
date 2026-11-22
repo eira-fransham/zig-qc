@@ -1,0 +1,48 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const package_name = "qc_test";
+
+    // wasm32 with every feature enabled (notably SIMD), which is what zig-qc
+    // expects, except relaxed SIMD (QuakeC has no equivalent, and wasm-opt is
+    // run without it) and tail calls (QuakeC has none either).
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+        .cpu_model = .{
+            .explicit = &std.Target.wasm.cpu.bleeding_edge,
+        },
+        .cpu_features_sub = std.Target.wasm.featureSet(&.{ .relaxed_simd, .tail_call }),
+    });
+
+    const out_name = b.option([]const u8, "out-name", "Name of the installed .wasm file") orelse "qc_test.wasm";
+
+    const lib = b.addLibrary(.{
+        .name = std.fmt.comptimePrint("{s}-unopt", .{package_name}),
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = .small,
+            .pic = true,
+            .strip = true,
+        }),
+    });
+
+    // Optimise the module with `wasm-opt`, then install it as
+    // `lib/<out-name>`.
+    const wasm_opt = b.addSystemCommand(&.{ "wasm-opt", "-Oz" });
+    wasm_opt.addArtifactArg(lib);
+    wasm_opt.addArgs(&.{
+        "--enable-reference-types",
+        "--enable-bulk-memory-opt",
+        "--enable-simd",
+        "--enable-nontrapping-float-to-int",
+        "--enable-extended-const",
+    });
+    wasm_opt.addArg("-o");
+    const optimized = wasm_opt.addOutputFileArg2(package_name, .{});
+
+    const install = b.addInstallLibFile(optimized, out_name);
+    b.getInstallStep().dependOn(&install.step);
+}

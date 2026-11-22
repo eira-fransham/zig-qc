@@ -269,3 +269,78 @@ pub fn merge_blocks(body: &mut waffle::FunctionBody) {
         }
     }
 }
+
+/// Rewrite `k + b`, `b + k` and `k - b` for a constant `k` and a comparison
+/// result `b` (0 or 1) into a `select` between two constants. LLVM computes
+/// `c ? f : g` this way when `f` and `g` are adjacent (e.g. function pointers
+/// `__table_base + (x != 0)`); as a `select`, each constant gets its own
+/// type from its use, rather than being arithmetic on a number.
+pub fn bool_offsets_to_select(body: &mut waffle::FunctionBody) {
+    use waffle::{Operator as O, Type, ValueDef};
+    let is_bool = |body: &waffle::FunctionBody, v: waffle::Value| {
+        matches!(
+            body.values[body.resolve_alias(v)],
+            ValueDef::Operator(
+                O::I32Eqz
+                    | O::I64Eqz
+                    | O::I32Eq
+                    | O::I32Ne
+                    | O::I32LtS
+                    | O::I32LtU
+                    | O::I32GtS
+                    | O::I32GtU
+                    | O::I32LeS
+                    | O::I32LeU
+                    | O::I32GeS
+                    | O::I32GeU
+                    | O::I64Eq
+                    | O::I64Ne
+                    | O::I64LtS
+                    | O::I64LtU
+                    | O::I64GtS
+                    | O::I64GtU
+                    | O::I64LeS
+                    | O::I64LeU
+                    | O::I64GeS
+                    | O::I64GeU
+                    | O::F32Eq
+                    | O::F32Ne
+                    | O::F32Lt
+                    | O::F32Gt
+                    | O::F32Le
+                    | O::F32Ge,
+                _,
+                _
+            )
+        )
+    };
+    let values: Vec<_> = body.values.iter().collect();
+    for v in values {
+        let ValueDef::Operator(op @ (O::I32Add | O::I32Sub), args, tys) = body.values[v] else {
+            continue;
+        };
+        let [a, b] = body.arg_pool[args] else {
+            continue;
+        };
+        let (k, cond, delta) = match (
+            crate::infer::const_val(body, a),
+            crate::infer::const_val(body, b),
+        ) {
+            (Some(k), None) if is_bool(body, b) => (k, b, if op == O::I32Add { 1 } else { -1 }),
+            (None, Some(k)) if op == O::I32Add && is_bool(body, a) => (k, a, 1),
+            _ => continue,
+        };
+        let ty = body.single_type_list(Type::I32);
+        let konst = |body: &mut waffle::FunctionBody, c: i64| {
+            body.add_value(ValueDef::Operator(
+                O::I32Const { value: c as u32 },
+                Default::default(),
+                ty,
+            ))
+        };
+        let hi = konst(body, k + delta);
+        let lo = konst(body, k);
+        let args = body.arg_pool.from_iter([hi, lo, cond].into_iter());
+        body.values[v] = ValueDef::Operator(O::Select, args, tys);
+    }
+}
