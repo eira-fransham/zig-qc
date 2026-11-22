@@ -348,7 +348,7 @@ extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) StringRef;
 // name of a user global (see `userGlobal`).
 extern fn __quakec_load_float(ptr: *const anyopaque) f32;
 extern fn __quakec_load_vector(ptr: *const anyopaque) Vector;
-extern fn __quakec_load_entity(ptr: *const anyopaque) callconv(.{ .wasm_mvp = .{} }) EntityRef;
+extern fn __quakec_load_entity(ptr: *const anyopaque) EntityRef;
 extern fn __quakec_load_string(ptr: *const anyopaque) StringRef;
 extern fn __quakec_load_fn(ptr: *const anyopaque) Function;
 

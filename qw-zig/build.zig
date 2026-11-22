@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const package_name = "qw_zig";
+
     // wasm32 with every feature enabled (notably reference types, SIMD and
     // tail calls), which is what zig-qc expects.
     const target = b.resolveTargetQuery(.{
@@ -14,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const out_name = b.option([]const u8, "out-name", "Name of the installed .wasm file") orelse "qw_zig.wasm";
 
     const lib = b.addLibrary(.{
-        .name = "qw_zig-unopt",
+        .name = std.fmt.comptimePrint("{s}-unopt", .{package_name}),
         .linkage = .dynamic,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/root.zig"),
@@ -38,7 +40,7 @@ pub fn build(b: *std.Build) void {
         "--enable-extended-const",
     });
     wasm_opt.addArg("-o");
-    const optimized = wasm_opt.addOutputFileArg2("qw_zig", .{});
+    const optimized = wasm_opt.addOutputFileArg2(package_name, .{});
 
     const install = b.addInstallLibFile(optimized, out_name);
     b.getInstallStep().dependOn(&install.step);
