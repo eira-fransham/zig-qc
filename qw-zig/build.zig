@@ -4,13 +4,15 @@ pub fn build(b: *std.Build) void {
     const package_name = "qw_zig";
 
     // wasm32 with every feature enabled (notably reference types, SIMD and
-    // tail calls), which is what zig-qc expects.
+    // tail calls), which is what zig-qc expects, except relaxed SIMD:
+    // QuakeC has no equivalent, and wasm-opt is run without it.
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .cpu_model = .{
             .explicit = &std.Target.wasm.cpu.bleeding_edge,
         },
+        .cpu_features_sub = std.Target.wasm.featureSet(&.{.relaxed_simd}),
     });
 
     const out_name = b.option([]const u8, "out-name", "Name of the installed .wasm file") orelse "qw_zig.wasm";

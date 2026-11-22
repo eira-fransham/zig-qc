@@ -14,7 +14,7 @@ pub export fn scalar_globals() f32 {
     defs.other.set(defs.self.get());
     defs.msg_entity.set(defs.world.get());
     defs.mapname.set(defs.mapname.get());
-    defs.force_retouch.set(!defs.deathmatch.get());
+    defs.force_retouch.set(defs.deathmatch.get());
     defs.serverflags.set(defs.total_secrets.get() + 1);
     return defs.time.get() + defs.frametime.get();
 }
@@ -75,7 +75,7 @@ pub export fn string_literals(e: Entity) void {
     _ = defs.precache_model(String.lit("progs/player.mdl"));
     defs.dprint(String.lit("hello, \"world\"\n"));
     e.set(.classname, String.lit("monster_ogre"));
-    if (e.get(.netname).eql(String.lit("player"))) defs.bprint(String.lit("tab\there \\ \x80\xff\n"));
+    if (e.get(.netname).eql(String.lit("player"))) defs.bprint(0, String.lit("tab\there \\ \x80\xff\n"));
 }
 
 /// A literal chosen at runtime (LLVM may select between the two addresses).

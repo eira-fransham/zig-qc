@@ -15,7 +15,7 @@ use walrus::ir::{
 use walrus::{FunctionId, LocalFunction, LocalId};
 
 use crate::data::{DATA_BASE, DataKind, StaticData};
-use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
+use crate::qc::{BinOp, Choice, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
 use crate::translate::{Ctx, FuncKind, Intrinsic, TABLE_BASE};
 
 /// Largest integer magnitude exactly representable as an f32.
@@ -117,6 +117,9 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         l.emit(Stmt::Return(Some(v)));
     }
 
+    // Before the zero-initialization below, which never reaches a use.
+    l.resolve_choices(&params)?;
+
     // Wasm locals start at zero, but QuakeC locals live in the globals area
     // and (in vanilla engines) keep their value from the previous call.
     let mut body: Vec<Stmt> = l
@@ -146,6 +149,70 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
 }
 
 impl Lower<'_, '_> {
+    /// Replace every [`Expr::Choose`] in the lowered body. The local it reads
+    /// must only ever be assigned constants (or `select`s between constants,
+    /// or copies of other such locals), so it always holds one of them; the
+    /// choice becomes a chain of `select`s comparing it with each.
+    fn resolve_choices(&mut self, params: &[(String, Ty)]) -> Result<()> {
+        let mut out = std::mem::take(&mut self.out);
+        let mut assigns: HashMap<String, Vec<Expr>> = HashMap::new();
+        walk_stmts(&out, &mut |s| {
+            if let Stmt::Assign(Expr::Local(n), v) = s {
+                assigns.entry(n.clone()).or_default().push(v.clone());
+            }
+        });
+        for s in &mut out {
+            walk_stmt_exprs(s, &mut |e| self.resolve_choice(e, &assigns, params))?;
+        }
+        self.out = out;
+        Ok(())
+    }
+
+    fn resolve_choice(
+        &mut self,
+        e: &mut Expr,
+        assigns: &HashMap<String, Vec<Expr>>,
+        params: &[(String, Ty)],
+    ) -> Result<()> {
+        let Expr::Choose(kind, n) = e else {
+            return Ok(());
+        };
+        let (kind, n) = (*kind, n.clone());
+        let what = match kind {
+            Choice::FuncRef => "function pointer",
+            Choice::Str(_) => "string literal address",
+            Choice::Global(_) => "memory address",
+        };
+        let mut seen = HashSet::from([n.clone()]);
+        let cs = local_consts(&n, assigns, params, &mut seen)
+            .map_err(|why| anyhow!("{what} in local `{n}` is not always a constant: {why}"))?;
+        // Constants that aren't valid here (e.g. a zero that LLVM never uses
+        // on this path) are dropped; at least one must be valid.
+        let (mut good, mut arms, mut first_err) = (Vec::new(), Vec::new(), None);
+        for c in cs {
+            let arm = match kind {
+                Choice::FuncRef => self.func_ref(&Expr::Float(c)),
+                Choice::Str(len) => self.string_literal(&Expr::Float(c), &Expr::Float(len as f32)),
+                Choice::Global(qt) => self.global_load(&Expr::Float(c), qt),
+            };
+            match arm {
+                Ok(a) => {
+                    good.push(c);
+                    arms.push(a);
+                }
+                Err(err) => {
+                    first_err.get_or_insert(err);
+                }
+            }
+        }
+        if arms.is_empty() {
+            let err = first_err.unwrap_or_else(|| anyhow!("it is never assigned a constant"));
+            return Err(err.context(format!("no value of local `{n}` is a valid {what}")));
+        }
+        *e = select_chain(&Expr::Local(n), &good, arms);
+        Ok(())
+    }
+
     fn emit(&mut self, s: Stmt) {
         self.last_call_temp = None;
         self.out.push(s);
@@ -309,6 +376,24 @@ impl Lower<'_, '_> {
             Expr::Float(f) if f.fract() == 0.0 => Ok(*f as i32),
             other => bail!("{what} must be a compile-time constant, found `{other:?}`"),
         }
+    }
+
+    /// Read the QuakeC global at `addr`, which must be constant, a `select`
+    /// between constants, or a local that is only ever assigned constants
+    /// (see [`Expr::Choose`]). LLVM merges `if (c) a.get() else b.get()` into
+    /// one load of a selected address.
+    fn global_load(&mut self, addr: &Expr, qt: QcType) -> Result<Expr> {
+        if let Expr::Local(n) = addr {
+            return Ok(Expr::Choose(Choice::Global(qt), n.clone()));
+        }
+        if let Expr::Select(c, a, b) = addr {
+            return Ok(Expr::Select(
+                c.clone(),
+                Box::new(self.global_load(a, qt)?),
+                Box::new(self.global_load(b, qt)?),
+            ));
+        }
+        Ok(Expr::Global(self.global_at(addr, 0, qt)?))
     }
 
     /// Resolve a constant address into a QuakeC global: a system global slot,
@@ -716,6 +801,16 @@ impl Lower<'_, '_> {
                 self.stack.push((e, t));
                 Ok(true)
             }
+            Instr::GlobalGet(ir::GlobalGet { global })
+            | Instr::GlobalSet(ir::GlobalSet { global })
+                if Some(*global) == self.ctx.stack_pointer =>
+            {
+                bail!(
+                    "this function uses the shadow stack (`__stack_pointer`), which QuakeC can't \
+                     support. Usually a struct was passed by reference or a local's address was \
+                     taken; pass `Entity`, `String` and `Vector` values by value instead"
+                )
+            }
             Instr::GlobalGet(ir::GlobalGet { global }) if Some(*global) == self.ctx.memory_base => {
                 self.stack
                     .push((Expr::Float(DATA_BASE as f32), Ty::Known(QcType::Float)));
@@ -785,6 +880,64 @@ impl Lower<'_, '_> {
                 let (x, _) = self.pop()?;
                 let (v, _) = self.pop_raw()?;
                 let e = self.replace_lane(v, *idx, x);
+                self.stack.push((e, Ty::Known(QcType::Vector)));
+                Ok(true)
+            }
+            Instr::Binop(ir::Binop {
+                op:
+                    op @ (BinaryOp::F32x4Eq
+                    | BinaryOp::F32x4Ne
+                    | BinaryOp::F32x4Lt
+                    | BinaryOp::F32x4Gt
+                    | BinaryOp::F32x4Le
+                    | BinaryOp::F32x4Ge
+                    | BinaryOp::F32x4PMin
+                    | BinaryOp::F32x4PMax),
+            }) => {
+                let (b, _) = self.pop_raw()?;
+                let (a, _) = self.pop_raw()?;
+                let e = self.lanewise(*op, a, b);
+                self.stack.push((e, Ty::Known(QcType::Vector)));
+                Ok(true)
+            }
+            // On a mask (see `lanewise`).
+            Instr::Unop(ir::Unop {
+                op: UnaryOp::V128Not,
+            }) => {
+                let (m, _) = self.pop_raw()?;
+                let parts = self.vector_lanes(m).map(|x| Expr::Un(UnOp::Not, Box::new(x)));
+                self.stack
+                    .push((Expr::MakeVector(Box::new(parts)), Ty::Known(QcType::Vector)));
+                Ok(true)
+            }
+            // `m ? a : b` lane by lane, for a mask `m` (see `lanewise`).
+            Instr::V128Bitselect(_) => {
+                let (m, _) = self.pop_raw()?;
+                let (b, _) = self.pop_raw()?;
+                let (a, _) = self.pop_raw()?;
+                let (m, b, a) = (self.vector_lanes(m), self.vector_lanes(b), self.vector_lanes(a));
+                let [m0, m1, m2] = m;
+                let [b0, b1, b2] = b;
+                let [a0, a1, a2] = a;
+                let sel = |m, a, b| Expr::Select(Box::new(m), Box::new(a), Box::new(b));
+                let parts = [sel(m0, a0, b0), sel(m1, a1, b1), sel(m2, a2, b2)];
+                self.stack
+                    .push((Expr::MakeVector(Box::new(parts)), Ty::Known(QcType::Vector)));
+                Ok(true)
+            }
+            // A lane of a mask (see `lanewise`).
+            Instr::Unop(ir::Unop {
+                op: UnaryOp::I32x4ExtractLane { idx },
+            }) => {
+                let (v, _) = self.pop_raw()?;
+                let e = self.extract_lane(v, *idx);
+                self.stack.push((e, Ty::Known(QcType::Float)));
+                Ok(true)
+            }
+            Instr::I8x16Shuffle(ir::I8x16Shuffle { indices }) => {
+                let (b, _) = self.pop_raw()?;
+                let (a, _) = self.pop_raw()?;
+                let e = self.shuffle(a, b, indices)?;
                 self.stack.push((e, Ty::Known(QcType::Vector)));
                 Ok(true)
             }
@@ -1066,10 +1219,12 @@ impl Lower<'_, '_> {
     }
 
     /// The QuakeC function a Zig function pointer (an index into
-    /// `__indirect_function_table`) refers to. Must be a constant, or a
-    /// `select` between constants.
+    /// `__indirect_function_table`) refers to. Must be a constant, a
+    /// `select` between constants, or a local that is only ever assigned
+    /// constants (see [`Expr::Choose`]).
     fn func_ref(&self, ptr: &Expr) -> Result<Expr> {
         match ptr {
+            Expr::Local(n) => Ok(Expr::Choose(Choice::FuncRef, n.clone())),
             Expr::Float(i) => {
                 let f = self.ctx.table_funcs.get(&(*i as u64)).with_context(|| {
                     format!("function pointer {i} is not in `__indirect_function_table`")
@@ -1137,6 +1292,78 @@ impl Lower<'_, '_> {
         }
     }
 
+    /// The three components of a vector, evaluating it only once.
+    fn vector_lanes(&mut self, v: Expr) -> [Expr; 3] {
+        let v = match v {
+            v @ (Expr::Vector(_) | Expr::MakeVector(_) | Expr::Local(_) | Expr::Global(_)) => v,
+            v => {
+                let v = self.materialize(v);
+                self.simple(v, Ty::Known(QcType::Vector))
+            }
+        };
+        [0, 1, 2].map(|i| self.extract_lane(v.clone(), i))
+    }
+
+    /// A lane-wise `f32x4` comparison, `pmin` or `pmax`. LLVM vectorizes runs
+    /// of component comparisons (like bounding box checks). Comparison
+    /// results are masks, represented as vectors with 0 or 1 in each lane
+    /// (wasm uses all-ones lanes, but the masks are only ever used through
+    /// `v128.not`, `v128.bitselect` and `i32x4.extract_lane`, and the code
+    /// LLVM generates only tests their low bit).
+    fn lanewise(&mut self, op: BinaryOp, a: Expr, b: Expr) -> Expr {
+        let (a, b) = (self.vector_lanes(a), self.vector_lanes(b));
+        let lane = |x: Expr, y: Expr| {
+            let sel = |c: Expr, t: Expr, f: Expr| Expr::Select(Box::new(c), Box::new(t), Box::new(f));
+            let cmp = |op| fold(op, x.clone(), y.clone());
+            match op {
+                // `pmin(a, b)` is `b < a ? b : a`, `pmax(a, b)` is `a < b ? b : a`.
+                BinaryOp::F32x4PMin => sel(fold(BinOp::Lt, y.clone(), x.clone()), y, x),
+                BinaryOp::F32x4PMax => sel(cmp(BinOp::Lt), y, x),
+                BinaryOp::F32x4Eq => cmp(BinOp::Eq),
+                BinaryOp::F32x4Ne => cmp(BinOp::Ne),
+                BinaryOp::F32x4Lt => cmp(BinOp::Lt),
+                BinaryOp::F32x4Gt => cmp(BinOp::Gt),
+                BinaryOp::F32x4Le => cmp(BinOp::Le),
+                BinaryOp::F32x4Ge => cmp(BinOp::Ge),
+                _ => unreachable!("not a lane-wise operator"),
+            }
+        };
+        let [a0, a1, a2] = a;
+        let [b0, b1, b2] = b;
+        Expr::MakeVector(Box::new([lane(a0, b0), lane(a1, b1), lane(a2, b2)]))
+    }
+
+    /// `i8x16.shuffle` of two vectors. LLVM uses it to splat or rearrange
+    /// lanes, so only shuffles that move whole `f32` lanes are supported.
+    /// The result's fourth lane is ignored.
+    fn shuffle(&mut self, a: Expr, b: Expr, indices: &[u8; 16]) -> Result<Expr> {
+        let mut lanes = [0u8; 3];
+        for (i, lane) in lanes.iter_mut().enumerate() {
+            let g = &indices[i * 4..i * 4 + 4];
+            ensure!(
+                g[0].is_multiple_of(4) && g.iter().zip(g[0]..).all(|(&x, y)| x == y),
+                "unsupported i8x16.shuffle {indices:?}: only whole f32 lanes can be moved"
+            );
+            *lane = g[0] / 4;
+        }
+        // Each source is evaluated once, and only if one of its lanes is used.
+        let source = |this: &mut Self, v: Expr, used: bool| match v {
+            _ if !used => None,
+            v @ (Expr::Vector(_) | Expr::MakeVector(_) | Expr::Local(_) | Expr::Global(_)) => Some(v),
+            v => {
+                let v = this.materialize(v);
+                Some(this.simple(v, Ty::Known(QcType::Vector)))
+            }
+        };
+        let a = source(self, a, lanes.iter().any(|&l| l < 4));
+        let b = source(self, b, lanes.iter().any(|&l| l >= 4));
+        let parts = lanes.map(|l| {
+            let (v, i) = if l < 4 { (&a, l) } else { (&b, l - 4) };
+            self.extract_lane(v.clone().expect("source is used"), i)
+        });
+        Ok(Expr::MakeVector(Box::new(parts)))
+    }
+
     fn replace_lane(&mut self, v: Expr, idx: u8, x: Expr) -> Expr {
         if idx >= 3 {
             return v;
@@ -1176,17 +1403,7 @@ impl Lower<'_, '_> {
             let b = self.materialize(b);
             return Expr::Bin(BinOp::Mul, Box::new(b), Box::new(f));
         }
-        let lanes = |this: &mut Self, v: Expr| -> [Expr; 3] {
-            let v = match v {
-                v @ (Expr::Vector(_) | Expr::MakeVector(_) | Expr::Local(_) | Expr::Global(_)) => v,
-                v => {
-                    let v = this.materialize(v);
-                    this.simple(v, Ty::Known(QcType::Vector))
-                }
-            };
-            [0, 1, 2].map(|i| this.extract_lane(v.clone(), i))
-        };
-        let (a, b) = (lanes(self, a), lanes(self, b));
+        let (a, b) = (self.vector_lanes(a), self.vector_lanes(b));
         let op = if div { BinOp::Div } else { BinOp::Mul };
         let [a0, a1, a2] = a;
         let [b0, b1, b2] = b;
@@ -1222,8 +1439,15 @@ impl Lower<'_, '_> {
 
     /// The string literal of `len` bytes at `ptr`. Both must be constants,
     /// or `select`s on the same condition between constants (LLVM sinks
-    /// `if (c) lit("a") else lit("bc")` into one call).
+    /// `if (c) lit("a") else lit("bc")` into one call). `ptr` may also be a
+    /// local that is only ever assigned constants, if `len` is constant (see
+    /// [`Expr::Choose`]).
     fn string_literal(&mut self, ptr: &Expr, len: &Expr) -> Result<Expr> {
+        if let (Expr::Local(n), Expr::Float(_)) = (ptr, len) {
+            let len = Self::const_i32(len, "string literal length")?;
+            ensure!(len >= 0, "negative string literal length {len}");
+            return Ok(Expr::Choose(Choice::Str(len as u32), n.clone()));
+        }
         match (ptr, len) {
             (Expr::Select(c, a, b), Expr::Select(lc, la, lb)) if c == lc => Ok(Expr::Select(
                 c.clone(),
@@ -1280,8 +1504,8 @@ impl Lower<'_, '_> {
                     _ => QcType::Func,
                 };
                 let (addr, _) = self.pop()?;
-                let g = self.global_at(&addr, 0, qt)?;
-                self.stack.push((Expr::Global(g), Ty::Known(qt)));
+                let e = self.global_load(&addr, qt)?;
+                self.stack.push((e, Ty::Known(qt)));
             }
             StoreFloat | StoreVector | StoreEntity | StoreString | StoreFn => {
                 let qt = match intr {
@@ -1399,6 +1623,131 @@ impl Lower<'_, '_> {
     }
 }
 
+/// Every constant the local `name` may hold, if it is only ever assigned
+/// constants, `select`s between constants or copies of such locals.
+/// Otherwise, a description of why not. Parameters are never constant:
+/// their value comes from the caller.
+fn local_consts(
+    name: &str,
+    assigns: &HashMap<String, Vec<Expr>>,
+    params: &[(String, Ty)],
+    seen: &mut HashSet<String>,
+) -> std::result::Result<Vec<f32>, String> {
+    if params.iter().any(|(p, _)| p == name) {
+        return Err(format!("`{name}` is a parameter"));
+    }
+    let mut cs = Vec::new();
+    let add = |c: f32, cs: &mut Vec<f32>| {
+        if !cs.contains(&c) {
+            cs.push(c);
+        }
+    };
+    let assigned = assigns
+        .get(name)
+        .ok_or_else(|| format!("`{name}` is never assigned"))?;
+    for v in assigned {
+        match v {
+            Expr::Float(c) => add(*c, &mut cs),
+            Expr::Select(_, a, b) if matches!((&**a, &**b), (Expr::Float(_), Expr::Float(_))) => {
+                for x in [a, b] {
+                    if let Expr::Float(c) = **x {
+                        add(c, &mut cs);
+                    }
+                }
+            }
+            Expr::Local(m) => {
+                if seen.insert(m.clone()) {
+                    for c in local_consts(m, assigns, params, seen)? {
+                        add(c, &mut cs);
+                    }
+                }
+            }
+            other => return Err(format!("`{name}` is assigned `{other:?}`")),
+        }
+    }
+    Ok(cs)
+}
+
+/// Call `f` on every statement, including nested ones.
+fn walk_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Stmt)) {
+    for s in stmts {
+        f(s);
+        if let Stmt::If(_, a, b) = s {
+            walk_stmts(a, f);
+            walk_stmts(b, f);
+        }
+    }
+}
+
+/// Call `f` on every expression in `s` (innermost first), including nested
+/// statements.
+fn walk_stmt_exprs(s: &mut Stmt, f: &mut impl FnMut(&mut Expr) -> Result<()>) -> Result<()> {
+    match s {
+        Stmt::Assign(a, b) => {
+            walk_expr(a, f)?;
+            walk_expr(b, f)
+        }
+        Stmt::Expr(e) | Stmt::Return(Some(e)) => walk_expr(e, f),
+        Stmt::If(c, a, b) => {
+            walk_expr(c, f)?;
+            for s in a.iter_mut().chain(b) {
+                walk_stmt_exprs(s, f)?;
+            }
+            Ok(())
+        }
+        Stmt::Return(None) | Stmt::Goto(_) | Stmt::Label(_) | Stmt::Comment(_) => Ok(()),
+    }
+}
+
+fn walk_expr(e: &mut Expr, f: &mut impl FnMut(&mut Expr) -> Result<()>) -> Result<()> {
+    match e {
+        Expr::Bin(_, a, b) => {
+            walk_expr(a, f)?;
+            walk_expr(b, f)?;
+        }
+        Expr::Select(a, b, c) => {
+            walk_expr(a, f)?;
+            walk_expr(b, f)?;
+            walk_expr(c, f)?;
+        }
+        Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) | Expr::Field(a, _) => {
+            walk_expr(a, f)?
+        }
+        Expr::Call(callee, args) => {
+            walk_expr(callee, f)?;
+            for a in args {
+                walk_expr(a, f)?;
+            }
+        }
+        Expr::MakeVector(parts) => {
+            for p in parts.iter_mut() {
+                walk_expr(p, f)?;
+            }
+        }
+        Expr::Float(_)
+        | Expr::Null
+        | Expr::Local(_)
+        | Expr::Global(_)
+        | Expr::FuncName(_)
+        | Expr::Vector(_)
+        | Expr::Str(_)
+        | Expr::Choose(..) => {}
+    }
+    f(e)
+}
+
+/// `arms[i]` where `v == choices[i]` (`v` must be one of `choices`): a chain
+/// of `select`s comparing `v` with each choice but the last.
+fn select_chain(v: &Expr, choices: &[f32], mut arms: Vec<Expr>) -> Expr {
+    let mut e = arms.pop().expect("at least one choice");
+    let rest = &choices[..arms.len()];
+    for (&c, arm) in rest.iter().zip(arms).rev() {
+        let is_c = Expr::Bin(BinOp::Eq, Box::new(v.clone()), Box::new(Expr::Float(c)));
+        e = Expr::Select(Box::new(is_c), Box::new(arm), Box::new(e));
+    }
+    e
+}
+
 fn lower_binop(op: BinaryOp, a: Expr, b: Expr) -> Result<Expr> {
     use BinaryOp::*;
     let qop = match op {
@@ -1430,7 +1779,31 @@ fn lower_binop(op: BinaryOp, a: Expr, b: Expr) -> Result<Expr> {
 /// Build `a op b`, folding it if both operands are constants (as QuakeC
 /// would compute it at runtime). Folding matters for static data: addresses
 /// like `__memory_base + 16` must become constants.
+///
+/// Arithmetic with a constant and a `select` between constants is pushed
+/// into the `select`, so that `base + (c ? 5 : 9)` (which LLVM produces when
+/// it merges two calls taking different string literals) becomes
+/// `c ? base + 5 : base + 9`, a `select` between constant addresses.
 fn fold(op: BinOp, a: Expr, b: Expr) -> Expr {
+    let arith = matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul);
+    let consts = |x: &Expr, y: &Expr| matches!((x, y), (Expr::Float(_), Expr::Float(_)));
+    match (a, b) {
+        (Expr::Select(c, x, y), k @ Expr::Float(_)) if arith && consts(&x, &y) => Expr::Select(
+            c,
+            Box::new(fold_consts(op, *x, k.clone())),
+            Box::new(fold_consts(op, *y, k)),
+        ),
+        (k @ Expr::Float(_), Expr::Select(c, x, y)) if arith && consts(&x, &y) => Expr::Select(
+            c,
+            Box::new(fold_consts(op, k.clone(), *x)),
+            Box::new(fold_consts(op, k, *y)),
+        ),
+        (a, b) => fold_consts(op, a, b),
+    }
+}
+
+/// [`fold`] for two constant operands; anything else is left as is.
+fn fold_consts(op: BinOp, a: Expr, b: Expr) -> Expr {
     let (Expr::Float(x), Expr::Float(y)) = (&a, &b) else {
         return Expr::Bin(op, Box::new(a), Box::new(b));
     };

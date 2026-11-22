@@ -31,8 +31,8 @@ impl QcType {
     }
 }
 
-/// A possibly-not-yet-inferred type. Only `externref` values use variables,
-/// since they may be either entities or strings.
+/// A possibly-not-yet-inferred type. Only handles (`i64` values) use
+/// variables, since they may be entities, strings or field references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ty {
     Known(QcType),
@@ -45,7 +45,7 @@ impl From<QcType> for Ty {
     }
 }
 
-/// Union-find over externref type variables.
+/// Union-find over handle type variables.
 #[derive(Default)]
 pub struct TypeVars {
     parent: Vec<usize>,
@@ -111,7 +111,7 @@ impl TypeVars {
         }
     }
 
-    /// Resolve a type; unconstrained externrefs default to `entity`.
+    /// Resolve a type; unconstrained handles default to `entity`.
     pub fn resolve(&mut self, t: Ty) -> QcType {
         match t {
             Ty::Known(t) => t,
@@ -219,6 +219,23 @@ pub enum Expr {
     /// collapsed (e.g. into `v_forward`); it is always turned into another
     /// expression before being emitted.
     MakeVector(Box<[Expr; 3]>),
+    /// A value that depends on which of several constants the local holds:
+    /// a function pointer, string literal address or global address that
+    /// LLVM computed on different paths and merged. Only exists during
+    /// lowering, which replaces it once every assignment to the local is
+    /// known.
+    Choose(Choice, String),
+}
+
+/// What an [`Expr::Choose`] computes from the constant in its local.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Choice {
+    /// The function at that `__indirect_function_table` index.
+    FuncRef,
+    /// The string literal of this many bytes at that address.
+    Str(u32),
+    /// The global at that address.
+    Global(QcType),
 }
 
 impl Expr {
@@ -234,6 +251,7 @@ impl Expr {
     pub fn reads_globals(&self) -> bool {
         match self {
             Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
+            Expr::Choose(c, _) => matches!(c, Choice::Global(_)),
             Expr::MakeVector(parts) => parts.iter().any(Expr::reads_globals),
             Expr::Float(_)
             | Expr::Null
@@ -249,7 +267,7 @@ impl Expr {
 
     pub fn reads_local(&self, name: &str) -> bool {
         match self {
-            Expr::Local(n) => n == name,
+            Expr::Local(n) | Expr::Choose(_, n) => n == name,
             Expr::Float(_)
             | Expr::Null
             | Expr::Global(_)
@@ -281,10 +299,21 @@ impl Expr {
             Expr::Str(bytes) => render_str(bytes, out),
             Expr::Local(n) | Expr::Global(n) | Expr::FuncName(n) => out.push_str(n),
             Expr::Bin(op, a, b) => {
+                // In QuakeC, `!x & 1` is `!(x & 1)`, so unary operands need
+                // their own parentheses.
+                let operand = |e: &Expr, tv: &mut TypeVars, out: &mut String| {
+                    if let Expr::Un(..) = e {
+                        out.push('(');
+                        e.render(tv, out);
+                        out.push(')');
+                    } else {
+                        e.render(tv, out);
+                    }
+                };
                 out.push('(');
-                a.render(tv, out);
+                operand(a, tv, out);
                 let _ = write!(out, " {} ", op.symbol());
-                b.render(tv, out);
+                operand(b, tv, out);
                 out.push(')');
             }
             Expr::Un(op, a) => {
@@ -322,6 +351,7 @@ impl Expr {
                 let _ = write!(out, ".{name}");
             }
             Expr::MakeVector(_) => unreachable!("MakeVector must be materialized before rendering"),
+            Expr::Choose(..) => unreachable!("Choose must be resolved before rendering"),
             Expr::Call(f, args) => {
                 f.render(tv, out);
                 out.push('(');

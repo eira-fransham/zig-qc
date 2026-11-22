@@ -2,24 +2,24 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     // wasm32 with every feature enabled (notably reference types, SIMD and
-    // tail calls), which is what wasm-to-qc expects.
+    // tail calls), which is what zig-qc expects, except relaxed SIMD:
+    // QuakeC has no equivalent, and wasm-opt is run without it.
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .cpu_model = .{
-            .explicit = &.{
-                .name = "bleeding_edge",
-                .llvm_name = "bleeding-edge",
-                .features = .{
-                    .ints = .{ 260083, 0, 0, 0, 0, 0 },
-                },
-            },
+            .explicit = &std.Target.wasm.cpu.bleeding_edge,
         },
+        .cpu_features_sub = std.Target.wasm.featureSet(&.{.relaxed_simd}),
     });
 
+    const out_name = b.option([]const u8, "out-name", "Name of the installed .wasm file") orelse "test.wasm";
+
+    const out_name_no_ext = std.mem.trimEnd(u8, out_name, ".wasm");
+
     // `addModule` makes this module available to consumers of this package.
-    const mod = b.addModule("quakec_zig", moduleOptions(b, "src/root.zig", target, .small));
-    addOptLibrary(b, "test", mod);
+    const mod = b.addModule("test", moduleOptions(b, "src/root.zig", target, .small));
+    addOptLibrary(b, out_name_no_ext, mod);
 
     const stress_test = b.createModule(moduleOptions(b, "src/stress-test.zig", target, .small));
     addOptLibrary(b, "stress-test", stress_test);

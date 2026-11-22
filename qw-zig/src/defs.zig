@@ -112,10 +112,14 @@ pub const Field = enum(u32) {
     }
 };
 
-pub const Entity = extern struct {
-    const Self = @This();
+/// A QuakeC `entity`. In wasm this is an opaque `i64` handle: the converter
+/// infers whether an `i64` is an entity, a string or a field reference from
+/// the intrinsics and builtins it is passed to. It is a scalar (not a struct)
+/// so that Zig always passes it by value, never through the shadow stack.
+pub const Entity = enum(u64) {
+    _,
 
-    ref: EntityRef,
+    const Self = @This();
 
     // `inline` so that `field` reaches the intrinsic as a constant; the
     // converter needs it to be a compile-time constant. `field` is a `Field`
@@ -123,11 +127,11 @@ pub const Entity = extern struct {
     pub inline fn get(this: Self, comptime field: anytype) FieldType(field) {
         const offset = fieldOffset(field);
         return switch (FieldType(field)) {
-            f32 => __quakec_load_entity_field_float(this.ref, offset),
-            Vector => __quakec_load_entity_field_vector(this.ref, offset),
-            String => .{ .ref = __quakec_load_entity_field_string(this.ref, offset) },
-            Entity => .{ .ref = __quakec_load_entity_field_entity(this.ref, offset) },
-            Function => __quakec_load_entity_field_fn(this.ref, offset),
+            f32 => __quakec_load_entity_field_float(this, offset),
+            Vector => __quakec_load_entity_field_vector(this, offset),
+            String => __quakec_load_entity_field_string(this, offset),
+            Entity => __quakec_load_entity_field_entity(this, offset),
+            Function => __quakec_load_entity_field_fn(this, offset),
             else => @compileError("unsupported field type " ++ @typeName(FieldType(field))),
         };
     }
@@ -135,55 +139,56 @@ pub const Entity = extern struct {
     pub inline fn set(this: Self, comptime field: anytype, value: FieldType(field)) void {
         const offset = fieldOffset(field);
         switch (FieldType(field)) {
-            f32 => __quakec_store_entity_field_float(this.ref, offset, value),
-            Vector => __quakec_store_entity_field_vector(this.ref, offset, value),
-            String => __quakec_store_entity_field_string(this.ref, offset, value.ref),
-            Entity => __quakec_store_entity_field_entity(this.ref, offset, value.ref),
-            Function => __quakec_store_entity_field_fn(this.ref, offset, value),
+            f32 => __quakec_store_entity_field_float(this, offset, value),
+            Vector => __quakec_store_entity_field_vector(this, offset, value),
+            String => __quakec_store_entity_field_string(this, offset, value),
+            Entity => __quakec_store_entity_field_entity(this, offset, value),
+            Function => __quakec_store_entity_field_fn(this, offset, value),
             else => @compileError("unsupported field type " ++ @typeName(FieldType(field))),
         }
     }
 
     /// `a == b` (`EQ_E`).
     pub inline fn eql(a: Self, b: Self) bool {
-        return __quakec_eq_entity(a.ref, b.ref);
+        return __quakec_eq_entity(a, b);
     }
 
     /// `a != b` (`NE_E`).
     pub inline fn neq(a: Self, b: Self) bool {
-        return __quakec_ne_entity(a.ref, b.ref);
+        return __quakec_ne_entity(a, b);
     }
 
     /// `!e` (`NOT_ENT`): whether this is `world`/null.
     pub inline fn isNull(this: Self) bool {
-        return __quakec_not_entity(this.ref);
+        return __quakec_not_entity(this);
     }
 };
-pub const String = extern struct {
-    const Self = @This();
+/// A QuakeC `string`, an opaque `i64` handle like `Entity`.
+pub const String = enum(u64) {
+    _,
 
-    ref: StringRef,
+    const Self = @This();
 
     /// `a == b` (`EQ_S`), comparing contents.
     pub inline fn eql(a: Self, b: Self) bool {
-        return __quakec_eq_string(a.ref, b.ref);
+        return __quakec_eq_string(a, b);
     }
 
     /// `a != b` (`NE_S`), comparing contents.
     pub inline fn neq(a: Self, b: Self) bool {
-        return __quakec_ne_string(a.ref, b.ref);
+        return __quakec_ne_string(a, b);
     }
 
     /// `!s` (`NOT_S`): whether this is null or empty.
     pub inline fn isNull(this: Self) bool {
-        return __quakec_not_string(this.ref);
+        return __quakec_not_string(this);
     }
 
     /// A string literal, e.g. `String.lit("progs/player.mdl")`. The bytes
     /// are placed in static data and the converter emits a QuakeC `"..."`.
     pub inline fn lit(comptime s: []const u8) String {
         if (!NoNul(s).ok) @compileError("QuakeC strings can't contain NUL bytes");
-        return .{ .ref = __quakec_string_literal(s.ptr, s.len) };
+        return __quakec_string_literal(s.ptr, s.len);
     }
 };
 
@@ -198,11 +203,8 @@ fn NoNul(comptime s: []const u8) type {
     };
 }
 
-const EntityRef = *addrspace(.externref) const struct {};
-const StringRef = *addrspace(.externref) const struct {};
-
 comptime {
-    if (Entity == String or EntityRef == StringRef) unreachable;
+    if (Entity == String) unreachable;
 }
 
 /// A QuakeC `vector`. With simd128 enabled this is passed as a `v128`.
@@ -210,13 +212,15 @@ pub const Vector = @Vector(3, f32);
 
 /// A QuakeC field reference of type `.T` (e.g. `EntityField(String)` is `.string`).
 pub fn EntityField(comptime T: type) type {
-    return *addrspace(.externref) const struct {
+    return enum(u64) {
+        _,
+
         pub const Type = T;
     };
 }
 
 /// A QuakeC function value (`void()`), as stored in globals and fields.
-pub const Function = *addrspace(.funcref) const fn () callconv(.c) void;
+pub const Function = *addrspace(.funcref) const fn () callconv(.{ .wasm_mvp = .{} }) void;
 
 /// A user-defined entity field `.T name`, which the converter declares. See
 /// `userField`.
@@ -319,43 +323,43 @@ extern fn __quakec_not_fn(f: Function) bool;
 // Entity field access. `field` is the field's offset (see `Field`), and must
 // be a compile-time constant. There is one intrinsic per type so the
 // converter can emit the correctly-typed load/store instruction.
-extern fn __quakec_load_entity_field_float(ent: EntityRef, field: u32) f32;
-extern fn __quakec_load_entity_field_vector(ent: EntityRef, field: u32) Vector;
-extern fn __quakec_load_entity_field_string(ent: EntityRef, field: u32) StringRef;
-extern fn __quakec_load_entity_field_entity(ent: EntityRef, field: u32) EntityRef;
-extern fn __quakec_load_entity_field_fn(ent: EntityRef, field: u32) Function;
+extern fn __quakec_load_entity_field_float(ent: Entity, field: u32) f32;
+extern fn __quakec_load_entity_field_vector(ent: Entity, field: u32) Vector;
+extern fn __quakec_load_entity_field_string(ent: Entity, field: u32) String;
+extern fn __quakec_load_entity_field_entity(ent: Entity, field: u32) Entity;
+extern fn __quakec_load_entity_field_fn(ent: Entity, field: u32) Function;
 
-extern fn __quakec_store_entity_field_float(ent: EntityRef, field: u32, value: f32) void;
-extern fn __quakec_store_entity_field_vector(ent: EntityRef, field: u32, value: Vector) void;
-extern fn __quakec_store_entity_field_string(ent: EntityRef, field: u32, value: StringRef) void;
-extern fn __quakec_store_entity_field_entity(ent: EntityRef, field: u32, value: EntityRef) void;
-extern fn __quakec_store_entity_field_fn(ent: EntityRef, field: u32, value: Function) void;
+extern fn __quakec_store_entity_field_float(ent: Entity, field: u32, value: f32) void;
+extern fn __quakec_store_entity_field_vector(ent: Entity, field: u32, value: Vector) void;
+extern fn __quakec_store_entity_field_string(ent: Entity, field: u32, value: String) void;
+extern fn __quakec_store_entity_field_entity(ent: Entity, field: u32, value: Entity) void;
+extern fn __quakec_store_entity_field_fn(ent: Entity, field: u32, value: Function) void;
 
-// Comparisons. Wasm can't compare `externref`s itself, and QuakeC needs the
-// type to pick the right opcode.
-extern fn __quakec_eq_entity(a: EntityRef, b: EntityRef) bool;
-extern fn __quakec_ne_entity(a: EntityRef, b: EntityRef) bool;
-extern fn __quakec_not_entity(e: EntityRef) bool;
-extern fn __quakec_eq_string(a: StringRef, b: StringRef) bool;
-extern fn __quakec_ne_string(a: StringRef, b: StringRef) bool;
-extern fn __quakec_not_string(s: StringRef) bool;
+// Comparisons. The handles are opaque, and QuakeC needs the type to pick the
+// right opcode.
+extern fn __quakec_eq_entity(a: Entity, b: Entity) bool;
+extern fn __quakec_ne_entity(a: Entity, b: Entity) bool;
+extern fn __quakec_not_entity(e: Entity) bool;
+extern fn __quakec_eq_string(a: String, b: String) bool;
+extern fn __quakec_ne_string(a: String, b: String) bool;
+extern fn __quakec_not_string(s: String) bool;
 
 // A string literal. `ptr` must be a constant address in static data and `len`
 // a constant; the converter reads the bytes and emits a QuakeC literal.
-extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) StringRef;
+extern fn __quakec_string_literal(ptr: [*]const u8, len: usize) String;
 
 // Globals. `ptr` is `slot * 4` for system globals, or the address of the
 // name of a user global (see `userGlobal`).
 extern fn __quakec_load_float(ptr: *const anyopaque) f32;
 extern fn __quakec_load_vector(ptr: *const anyopaque) Vector;
-extern fn __quakec_load_entity(ptr: *const anyopaque) EntityRef;
-extern fn __quakec_load_string(ptr: *const anyopaque) StringRef;
+extern fn __quakec_load_entity(ptr: *const anyopaque) Entity;
+extern fn __quakec_load_string(ptr: *const anyopaque) String;
 extern fn __quakec_load_fn(ptr: *const anyopaque) Function;
 
 extern fn __quakec_store_float(ptr: *const anyopaque, value: f32) void;
 extern fn __quakec_store_vector(ptr: *const anyopaque, value: Vector) void;
-extern fn __quakec_store_entity(ptr: *const anyopaque, ent: EntityRef) void;
-extern fn __quakec_store_string(ptr: *const anyopaque, ent: StringRef) void;
+extern fn __quakec_store_entity(ptr: *const anyopaque, ent: Entity) void;
+extern fn __quakec_store_string(ptr: *const anyopaque, ent: String) void;
 extern fn __quakec_store_fn(ptr: *const anyopaque, value: Function) void;
 
 /// A QuakeC global of type `T`: `f32` (or an integer or `bool`, stored as a
@@ -378,11 +382,9 @@ pub fn Global(comptime T: type) type {
                 .bool => __quakec_load_float(this.ptr) != 0,
                 .@"fn" => @ptrCast(__quakec_load_fn(this.ptr)),
                 else => if (T == Entity)
-                    // For some reason, trying to generate `__quakec_load_entity` as
-                    // an extern fn causes LLVM to crash.
-                    .{ .ref = @panic("`__quakec_load_entity` broken") }
+                    __quakec_load_entity(this.ptr)
                 else if (T == String)
-                    .{ .ref = __quakec_load_string(this.ptr) }
+                    __quakec_load_string(this.ptr)
                 else if (T == Vector)
                     __quakec_load_vector(this.ptr)
                 else
@@ -397,9 +399,9 @@ pub fn Global(comptime T: type) type {
                 .bool => __quakec_store_float(this.ptr, if (value) 1 else 0),
                 .@"fn" => __quakec_store_fn(this.ptr, @ptrCast(value)),
                 else => if (T == Entity)
-                    __quakec_store_entity(this.ptr, value.ref)
+                    __quakec_store_entity(this.ptr, value)
                 else if (T == String)
-                    __quakec_store_string(this.ptr, value.ref)
+                    __quakec_store_string(this.ptr, value)
                 else if (T == Vector)
                     __quakec_store_vector(this.ptr, value)
                 else

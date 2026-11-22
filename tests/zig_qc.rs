@@ -41,7 +41,7 @@ fn init() {
 
     let build = std::fs::read_to_string(dir.join("build.zig")).unwrap();
     assert!(
-        build.contains("\"my_mod-unopt\"") && build.contains("\"out-name\""),
+        build.contains("const package_name = \"my_mod\";") && build.contains("\"out-name\""),
         "{build}"
     );
     assert!(!build.contains("@NAME@"));
@@ -82,7 +82,7 @@ fn init_rejects_bad_names() {
 #[test]
 fn build_reports_missing_tools() {
     let dir = temp_dir();
-    let out = zig_qc(&dir, &["build"], Some(&OsString::new()));
+    let out = zig_qc(&dir, &["build", "-O1"], Some(&OsString::new()));
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     for hint in ["ziglang.org", "www.fteqcc.org", "binaryen"] {
@@ -115,7 +115,7 @@ fn init_and_build() {
     let project = dir.join("project");
     std::fs::create_dir_all(&project).unwrap();
     assert!(zig_qc(&project, &["init", "demo"], None).status.success());
-    let out = zig_qc(&project, &["build"], Some(&path));
+    let out = zig_qc(&project, &["build", "-O1"], Some(&path));
     assert!(
         out.status.success(),
         "stdout:\n{}\nstderr:\n{}",

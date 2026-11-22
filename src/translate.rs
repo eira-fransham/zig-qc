@@ -163,6 +163,9 @@ pub struct Ctx<'m> {
     pub data_accessors: BTreeSet<DataKind>,
     /// The imported `__table_base` global, if any.
     pub table_base: Option<GlobalId>,
+    /// The imported `__stack_pointer` global, if any. Using it is an error
+    /// (see `lower.rs`); importing it without using it is fine.
+    pub stack_pointer: Option<GlobalId>,
     /// Functions in `__indirect_function_table`, by index.
     pub table_funcs: HashMap<u64, FunctionId>,
     /// Globals and fields declared by the module (by name, see
@@ -211,12 +214,14 @@ impl Ctx<'_> {
     pub fn val_ty(&mut self, t: ValType) -> Result<Ty> {
         Ok(match t {
             ValType::I32 | ValType::F32 => Ty::Known(QcType::Float),
-            ValType::Ref(r) if r == walrus::RefType::EXTERNREF => self.tv.fresh(),
+            // An opaque handle (`defs.Entity`, `defs.String` or a field
+            // reference); which one is inferred from how it is used.
+            ValType::I64 => self.tv.fresh(),
             ValType::Ref(r) if r == walrus::RefType::FUNCREF => Ty::Known(QcType::Func),
             // `@Vector(3, f32)`; the fourth lane is ignored.
             ValType::V128 => Ty::Known(QcType::Vector),
             other => bail!(
-                "unsupported value type {other:?} (only i32, f32, v128, externref and funcref are supported)"
+                "unsupported value type {other:?} (only i32, f32, v128, funcref and i64 handles are supported)"
             ),
         })
     }
@@ -267,6 +272,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     // (and so the target) and the function table before anything else.
     let mut memory_base = None;
     let mut table_base = None;
+    let mut stack_pointer = None;
     for import in module.imports.iter() {
         if let ImportKind::Global(g) = import.kind
             && import.module == ENV_MODULE
@@ -274,6 +280,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             match import.name.as_str() {
                 "__memory_base" => memory_base = Some(g),
                 "__table_base" => table_base = Some(g),
+                "__stack_pointer" => stack_pointer = Some(g),
                 _ => {}
             }
         }
@@ -294,6 +301,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         data,
         data_accessors: BTreeSet::new(),
         table_base,
+        stack_pointer,
         table_funcs: HashMap::new(),
         user_globals: BTreeMap::new(),
         user_fields: BTreeMap::new(),
@@ -402,10 +410,15 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             }
             ImportKind::Table(_) => {}
             // Static data is placed relative to `__memory_base` (see `data.rs`),
-            // and function pointers relative to `__table_base`.
+            // and function pointers relative to `__table_base`. wasm-ld may
+            // import `__stack_pointer` even if nothing uses it; uses are
+            // rejected when lowering.
             ImportKind::Global(_)
                 if import.module == ENV_MODULE
-                    && matches!(import.name.as_str(), "__memory_base" | "__table_base") => {}
+                    && matches!(
+                        import.name.as_str(),
+                        "__memory_base" | "__table_base" | "__stack_pointer"
+                    ) => {}
             ImportKind::Global(_) => {
                 bail!(
                     "imported global `{}.{}` is not supported",
@@ -607,7 +620,7 @@ fn sanitize(name: &str) -> String {
 }
 
 /// Check an imported builtin's wasm signature against its vanilla QuakeC
-/// signature, fixing the types of its externref parameters and result.
+/// signature, fixing the types of its handle (`i64`) parameters and result.
 fn check_builtin_sig(tv: &mut TypeVars, b: &sysdefs::Builtin, sig: &Sig) -> Result<()> {
     if sig.params.len() != b.params.len() {
         bail!(
@@ -625,7 +638,7 @@ fn check_builtin_sig(tv: &mut TypeVars, b: &sysdefs::Builtin, sig: &Sig) -> Resu
         };
         let ok = match (wasm, qc) {
             (Ty::Known(w), q) => w == q,
-            // An externref: entity, string or field.
+            // A handle: entity, string or field.
             (Ty::Var(_), QcType::Entity | QcType::String | QcType::StringField) => {
                 tv.unify(wasm, Ty::Known(qc), &format!("builtin `{}` {what}", b.name));
                 true
@@ -635,7 +648,7 @@ fn check_builtin_sig(tv: &mut TypeVars, b: &sysdefs::Builtin, sig: &Sig) -> Resu
         if !ok {
             let found = match wasm {
                 Ty::Known(w) => w.name().to_string(),
-                Ty::Var(_) => "externref".into(),
+                Ty::Var(_) => "an i64 handle".into(),
             };
             bail!("{what} should be {}, but the import has {found}", qc.name());
         }
