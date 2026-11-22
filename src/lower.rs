@@ -15,7 +15,8 @@ use walrus::ir::{
 use walrus::{FunctionId, LocalFunction, LocalId};
 
 use crate::data::{DATA_BASE, DataKind, StaticData};
-use crate::qc::{BinOp, Choice, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
+use crate::params::{Len, ParamRepr};
+use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
 use crate::translate::{Ctx, FuncKind, Intrinsic, TABLE_BASE};
 
 /// Largest integer magnitude exactly representable as an f32.
@@ -37,7 +38,17 @@ struct Label {
     /// Temporary receiving the block's result, for `End` labels.
     result: Option<(String, Ty)>,
     used: bool,
+    /// The merged [`Lower::known`] of every branch to an `End` label so far.
+    incoming: Option<Known>,
 }
+
+/// For each local (by QuakeC name), the constants it may hold on every path
+/// reaching this point of the lowering, sorted. Locals not in the map may hold
+/// anything.
+type Known = HashMap<String, Vec<f32>>;
+
+/// Sets larger than this are forgotten.
+const MAX_KNOWN: usize = 16;
 
 struct Lower<'a, 'm> {
     ctx: &'a mut Ctx<'m>,
@@ -59,10 +70,17 @@ struct Lower<'a, 'm> {
     /// Locals that only ever hold `__memory_base` or `__table_base`, with
     /// that base's value (see [`base_locals`]).
     base_locals: HashMap<LocalId, f32>,
-    /// Locals known to hold a constant at this point of the lowering (they
-    /// were last assigned one on every path here). Reads of them become that
-    /// constant, so that addresses computed through locals stay constant.
-    known: HashMap<LocalId, f32>,
+    /// Locals known to hold one of a few constants at this point of the
+    /// lowering. Reads of a local with just one become that constant, so that
+    /// addresses computed through locals stay constant; with several, uses
+    /// that need a constant pick between them (see [`Self::choose`]).
+    known: Known,
+    /// Parameters retyped as functions or strings (see `params.rs`), by name.
+    retyped: HashSet<String>,
+    /// Locals that may alias a retyped parameter (see `params.rs`), and
+    /// those that do, with the expression they hold.
+    may_alias: HashSet<LocalId>,
+    aliases: HashMap<LocalId, Expr>,
 }
 
 pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -> Result<Function> {
@@ -83,6 +101,14 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         (ctx.table_base, TABLE_BASE as f32),
     ];
     let base_locals = base_locals(func, &bases, &locals);
+    let retyped = match ctx.param_reprs.get(&id) {
+        Some(reprs) => (params.iter().zip(reprs))
+            .filter(|(_, r)| r.is_some())
+            .map(|((n, _), _)| n.clone())
+            .collect(),
+        None => HashSet::new(),
+    };
+    let may_alias = ctx.param_aliases.get(&id).cloned().unwrap_or_default();
     let mut l = Lower {
         ctx,
         func,
@@ -100,6 +126,9 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         last_call_temp: None,
         base_locals,
         known: HashMap::new(),
+        retyped,
+        may_alias,
+        aliases: HashMap::new(),
     };
 
     let entry = func.entry_block();
@@ -108,6 +137,7 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         kind: LabelKind::Return,
         result: None,
         used: false,
+        incoming: None,
     });
     l.label_of.insert(entry, 0);
     let live = l.lower_seq(entry)?;
@@ -116,9 +146,6 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
         l.unify(l.ret, t, "return value");
         l.emit(Stmt::Return(Some(v)));
     }
-
-    // Before the zero-initialization below, which never reaches a use.
-    l.resolve_choices(&params)?;
 
     // Wasm locals start at zero, but QuakeC locals live in the globals area
     // and (in vanilla engines) keep their value from the previous call.
@@ -149,53 +176,25 @@ pub fn lower_function(ctx: &mut Ctx<'_>, id: FunctionId, func: &LocalFunction) -
 }
 
 impl Lower<'_, '_> {
-    /// Replace every [`Expr::Choose`] in the lowered body. The local it reads
-    /// must only ever be assigned constants (or `select`s between constants,
-    /// or copies of other such locals), so it always holds one of them; the
-    /// choice becomes a chain of `select`s comparing it with each.
-    fn resolve_choices(&mut self, params: &[(String, Ty)]) -> Result<()> {
-        let mut out = std::mem::take(&mut self.out);
-        let mut assigns: HashMap<String, Vec<Expr>> = HashMap::new();
-        walk_stmts(&out, &mut |s| {
-            if let Stmt::Assign(Expr::Local(n), v) = s {
-                assigns.entry(n.clone()).or_default().push(v.clone());
-            }
-        });
-        for s in &mut out {
-            walk_stmt_exprs(s, &mut |e| self.resolve_choice(e, &assigns, params))?;
-        }
-        self.out = out;
-        Ok(())
-    }
-
-    fn resolve_choice(
+    /// The value computed by `arm` from whichever constant the local `n`
+    /// holds: a function pointer, string literal address or global address
+    /// that LLVM computed on different paths and merged. `n` must be known
+    /// to hold one of several constants here; the result is a chain of
+    /// `select`s comparing it with each.
+    fn choose(
         &mut self,
-        e: &mut Expr,
-        assigns: &HashMap<String, Vec<Expr>>,
-        params: &[(String, Ty)],
-    ) -> Result<()> {
-        let Expr::Choose(kind, n) = e else {
-            return Ok(());
+        n: &str,
+        what: &str,
+        mut arm: impl FnMut(&mut Self, f32) -> Result<Expr>,
+    ) -> Result<Expr> {
+        let Some(cs) = self.known.get(n).cloned() else {
+            bail!("{what} in local `{n}` is not a constant on every path here");
         };
-        let (kind, n) = (*kind, n.clone());
-        let what = match kind {
-            Choice::FuncRef => "function pointer",
-            Choice::Str(_) => "string literal address",
-            Choice::Global(_) => "memory address",
-        };
-        let mut seen = HashSet::from([n.clone()]);
-        let cs = local_consts(&n, assigns, params, &mut seen)
-            .map_err(|why| anyhow!("{what} in local `{n}` is not always a constant: {why}"))?;
         // Constants that aren't valid here (e.g. a zero that LLVM never uses
         // on this path) are dropped; at least one must be valid.
         let (mut good, mut arms, mut first_err) = (Vec::new(), Vec::new(), None);
         for c in cs {
-            let arm = match kind {
-                Choice::FuncRef => self.func_ref(&Expr::Float(c)),
-                Choice::Str(len) => self.string_literal(&Expr::Float(c), &Expr::Float(len as f32)),
-                Choice::Global(qt) => self.global_load(&Expr::Float(c), qt),
-            };
-            match arm {
+            match arm(self, c) {
                 Ok(a) => {
                     good.push(c);
                     arms.push(a);
@@ -206,15 +205,66 @@ impl Lower<'_, '_> {
             }
         }
         if arms.is_empty() {
-            let err = first_err.unwrap_or_else(|| anyhow!("it is never assigned a constant"));
+            let err = first_err.expect("known sets are never empty");
             return Err(err.context(format!("no value of local `{n}` is a valid {what}")));
         }
-        *e = select_chain(&Expr::Local(n), &good, arms);
-        Ok(())
+        Ok(select_chain(&Expr::Local(n.to_string()), &good, arms))
+    }
+
+    /// The constants `v` may evaluate to, if it is one of a few constants.
+    fn consts_of(&self, v: &Expr) -> Option<Vec<f32>> {
+        match v {
+            Expr::Float(c) => Some(vec![*c]),
+            Expr::Select(_, a, b) => {
+                let (Expr::Float(a), Expr::Float(b)) = (&**a, &**b) else {
+                    return None;
+                };
+                Some(const_set([*a, *b]))
+            }
+            Expr::Local(m) => self.known.get(m).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Record that the local `name` now holds `v`.
+    fn note_assign(&mut self, name: &str, v: &Expr) {
+        match self.consts_of(v) {
+            Some(cs) => self.known.insert(name.to_string(), cs),
+            None => self.known.remove(name),
+        };
+    }
+
+    /// The constant the local `n` holds, if it is known to be just one.
+    fn single_const(&self, n: &str) -> Option<f32> {
+        match self.known.get(n).map(Vec::as_slice) {
+            Some(&[c]) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Merge the state at the end of a block or `if`: the fallthrough state
+    /// (if control can fall off the end) and those of branches to its label.
+    fn merge_at_end(&mut self, fallthrough: Option<Known>, idx: usize) {
+        let incoming = self.labels[idx].incoming.take();
+        self.known = match (fallthrough, incoming) {
+            (Some(a), Some(b)) => meet(&a, &b),
+            (Some(k), None) | (None, Some(k)) => k,
+            // Unreachable from here on.
+            (None, None) => Known::new(),
+        };
     }
 
     fn emit(&mut self, s: Stmt) {
         self.last_call_temp = None;
+        match &s {
+            Stmt::Assign(Expr::Local(n), v) => self.note_assign(n, v),
+            Stmt::Assign(Expr::Component(l, _), _) => {
+                if let Expr::Local(n) = &**l {
+                    self.known.remove(n);
+                }
+            }
+            _ => {}
+        }
         self.out.push(s);
     }
 
@@ -287,6 +337,23 @@ impl Lower<'_, '_> {
         n
     }
 
+    /// Push a read of the local `n`: its constant, if it is known to hold
+    /// just one.
+    fn push_local(&mut self, n: String, t: Ty) {
+        let e = match self.single_const(&n) {
+            Some(c) => Expr::Float(c),
+            None => Expr::Local(n),
+        };
+        self.stack.push((e, t));
+    }
+
+    /// Push the result of a block or `if`, if it has one.
+    fn push_result(&mut self, result: Option<(String, Ty)>) {
+        if let Some((tmp, ty)) = result {
+            self.push_local(tmp, ty);
+        }
+    }
+
     /// Forget the constants of locals assigned anywhere in `seqs`.
     fn forget_assigned_in(&mut self, seqs: &[InstrSeqId]) {
         if self.known.is_empty() {
@@ -298,7 +365,9 @@ impl Lower<'_, '_> {
                 match instr {
                     Instr::LocalSet(ir::LocalSet { local })
                     | Instr::LocalTee(ir::LocalTee { local }) => {
-                        self.known.remove(local);
+                        if let Some((n, _)) = self.locals.get(local) {
+                            self.known.remove(n);
+                        }
                     }
                     Instr::Block(ir::Block { seq }) | Instr::Loop(ir::Loop { seq }) => {
                         todo.push(*seq)
@@ -379,12 +448,14 @@ impl Lower<'_, '_> {
     }
 
     /// Read the QuakeC global at `addr`, which must be constant, a `select`
-    /// between constants, or a local that is only ever assigned constants
-    /// (see [`Expr::Choose`]). LLVM merges `if (c) a.get() else b.get()` into
+    /// between constants, or a local known to hold one of several constants
+    /// (see [`Self::choose`]). LLVM merges `if (c) a.get() else b.get()` into
     /// one load of a selected address.
     fn global_load(&mut self, addr: &Expr, qt: QcType) -> Result<Expr> {
         if let Expr::Local(n) = addr {
-            return Ok(Expr::Choose(Choice::Global(qt), n.clone()));
+            return self.choose(n, "memory address", |l, c| {
+                l.global_load(&Expr::Float(c), qt)
+            });
         }
         if let Expr::Select(c, a, b) = addr {
             return Ok(Expr::Select(
@@ -430,10 +501,10 @@ impl Lower<'_, '_> {
     }
 
     fn set_local(&mut self, id: LocalId, v: Expr, t: Ty) -> Result<()> {
-        match v {
-            Expr::Float(c) => self.known.insert(id, c),
-            _ => self.known.remove(&id),
-        };
+        if self.may_alias.contains(&id) && self.retyped_param(&v).is_some() {
+            self.aliases.insert(id, v);
+            return Ok(());
+        }
         let (name, lt) = self.local(id)?;
         self.unify(lt, t, &format!("assignment to local `{name}`"));
         let n = name.clone();
@@ -450,6 +521,7 @@ impl Lower<'_, '_> {
             && src == tmp
             && let Some(Stmt::Assign(lhs, _)) = self.out.last_mut()
         {
+            self.known.remove(&name);
             *lhs = Expr::Local(name);
             let tmp = tmp.clone();
             self.temps.retain(|(n, _)| *n != tmp);
@@ -522,13 +594,30 @@ impl Lower<'_, '_> {
                         .cloned()
                         .ok_or_else(|| anyhow!("stack underflow"))?;
                     self.unify(ty, t, "block result");
+                    let mut known = self.known.clone();
+                    match self.consts_of(&v) {
+                        Some(cs) => known.insert(tmp.clone(), cs),
+                        None => known.remove(&tmp),
+                    };
+                    self.reach(idx, known);
                     stmts.push(Stmt::Assign(Expr::Local(tmp), v));
+                } else {
+                    self.reach(idx, self.known.clone());
                 }
                 stmts.push(Stmt::Goto(self.labels[idx].name.clone()));
             }
             LabelKind::Loop => stmts.push(Stmt::Goto(self.labels[idx].name.clone())),
         }
         Ok(stmts)
+    }
+
+    /// Record that a branch reaches the `End` label `idx` with state `known`.
+    fn reach(&mut self, idx: usize, known: Known) {
+        let label = &mut self.labels[idx];
+        label.incoming = Some(match label.incoming.take() {
+            Some(k) => meet(&k, &known),
+            None => known,
+        });
     }
 
     /// Lower a sequence (block body) in place. Returns whether control can
@@ -586,19 +675,19 @@ impl Lower<'_, '_> {
                     kind: LabelKind::End,
                     result: result.clone(),
                     used: false,
+                    incoming: None,
                 });
                 self.label_of.insert(*seq, idx);
                 let height = self.stack.len();
                 let (body, live) = self.lower_nested(*seq)?;
-                self.forget_assigned_in(&[*seq]);
                 self.out.extend(body);
                 self.finish_block(height, live, &result)?;
+                let fallthrough = live.then(|| std::mem::take(&mut self.known));
+                self.merge_at_end(fallthrough, idx);
                 if self.labels[idx].used {
                     self.emit(Stmt::Label(name));
                 }
-                if let Some((tmp, ty)) = result {
-                    self.stack.push((Expr::Local(tmp), ty));
-                }
+                self.push_result(result);
                 Ok(live || self.labels[idx].used)
             }
             Instr::Loop(ir::Loop { seq }) => {
@@ -610,13 +699,15 @@ impl Lower<'_, '_> {
                     kind: LabelKind::Loop,
                     result: None,
                     used: false,
+                    incoming: None,
                 });
                 self.label_of.insert(*seq, idx);
                 let height = self.stack.len();
-                // The back edge may bring other values.
+                // The back edge may bring other values. The body is lowered
+                // without assuming anything about them, so the states where
+                // it exits hold on every iteration.
                 self.forget_assigned_in(&[*seq]);
                 let (body, live) = self.lower_nested(*seq)?;
-                self.forget_assigned_in(&[*seq]);
                 if self.labels[idx].used {
                     self.emit(Stmt::Label(name));
                 }
@@ -646,6 +737,7 @@ impl Lower<'_, '_> {
                     kind: LabelKind::End,
                     result: result.clone(),
                     used: false,
+                    incoming: None,
                 });
                 self.label_of.insert(*consequent, idx);
                 self.label_of.insert(*alternative, idx);
@@ -656,21 +748,26 @@ impl Lower<'_, '_> {
                 std::mem::swap(&mut self.out, &mut then_body);
                 self.finish_block(height, then_live, &result)?;
                 std::mem::swap(&mut self.out, &mut then_body);
+                let then_known = std::mem::replace(&mut self.known, entry);
 
-                self.known = entry;
                 let (mut else_body, else_live) = self.lower_nested(*alternative)?;
-                self.forget_assigned_in(&[*consequent, *alternative]);
                 std::mem::swap(&mut self.out, &mut else_body);
                 self.finish_block(height, else_live, &result)?;
                 std::mem::swap(&mut self.out, &mut else_body);
+                let else_known = std::mem::take(&mut self.known);
 
+                let fallthrough = match (then_live, else_live) {
+                    (true, true) => Some(meet(&then_known, &else_known)),
+                    (true, false) => Some(then_known),
+                    (false, true) => Some(else_known),
+                    (false, false) => None,
+                };
+                self.merge_at_end(fallthrough, idx);
                 self.emit(Stmt::If(cond, then_body, else_body));
                 if self.labels[idx].used {
                     self.emit(Stmt::Label(name));
                 }
-                if let Some((tmp, ty)) = result {
-                    self.stack.push((Expr::Local(tmp), ty));
-                }
+                self.push_result(result);
                 Ok(then_live || else_live || self.labels[idx].used)
             }
             Instr::Br(ir::Br { block }) => {
@@ -775,14 +872,14 @@ impl Lower<'_, '_> {
             Instr::LocalTee(ir::LocalTee { local }) if self.base_locals.contains_key(local) => {
                 Ok(true)
             }
-            Instr::LocalGet(ir::LocalGet { local }) if self.known.contains_key(local) => {
-                let (_, t) = self.local(*local)?;
-                self.stack.push((Expr::Float(self.known[local]), t));
+            Instr::LocalGet(ir::LocalGet { local }) if self.aliases.contains_key(local) => {
+                let e = self.aliases[local].clone();
+                self.stack.push((e, Ty::Known(QcType::Float)));
                 Ok(true)
             }
             Instr::LocalGet(ir::LocalGet { local }) => {
                 let (n, t) = self.local(*local)?;
-                self.stack.push((Expr::Local(n), t));
+                self.push_local(n, t);
                 Ok(true)
             }
             Instr::LocalSet(ir::LocalSet { local }) => {
@@ -793,12 +890,12 @@ impl Lower<'_, '_> {
             Instr::LocalTee(ir::LocalTee { local }) => {
                 let (v, t) = self.pop()?;
                 self.set_local(*local, v, t)?;
+                if let Some(e) = self.aliases.get(local) {
+                    self.stack.push((e.clone(), Ty::Known(QcType::Float)));
+                    return Ok(true);
+                }
                 let (n, t) = self.local(*local)?;
-                let e = match self.known.get(local) {
-                    Some(&c) => Expr::Float(c),
-                    None => Expr::Local(n),
-                };
-                self.stack.push((e, t));
+                self.push_local(n, t);
                 Ok(true)
             }
             Instr::GlobalGet(ir::GlobalGet { global })
@@ -905,7 +1002,9 @@ impl Lower<'_, '_> {
                 op: UnaryOp::V128Not,
             }) => {
                 let (m, _) = self.pop_raw()?;
-                let parts = self.vector_lanes(m).map(|x| Expr::Un(UnOp::Not, Box::new(x)));
+                let parts = self
+                    .vector_lanes(m)
+                    .map(|x| Expr::Un(UnOp::Not, Box::new(x)));
                 self.stack
                     .push((Expr::MakeVector(Box::new(parts)), Ty::Known(QcType::Vector)));
                 Ok(true)
@@ -915,7 +1014,11 @@ impl Lower<'_, '_> {
                 let (m, _) = self.pop_raw()?;
                 let (b, _) = self.pop_raw()?;
                 let (a, _) = self.pop_raw()?;
-                let (m, b, a) = (self.vector_lanes(m), self.vector_lanes(b), self.vector_lanes(a));
+                let (m, b, a) = (
+                    self.vector_lanes(m),
+                    self.vector_lanes(b),
+                    self.vector_lanes(a),
+                );
                 let [m0, m1, m2] = m;
                 let [b0, b1, b2] = b;
                 let [a0, a1, a2] = a;
@@ -1220,11 +1323,16 @@ impl Lower<'_, '_> {
 
     /// The QuakeC function a Zig function pointer (an index into
     /// `__indirect_function_table`) refers to. Must be a constant, a
-    /// `select` between constants, or a local that is only ever assigned
-    /// constants (see [`Expr::Choose`]).
-    fn func_ref(&self, ptr: &Expr) -> Result<Expr> {
+    /// `select` between constants, or a local known to hold one of several
+    /// constants (see [`Self::choose`]).
+    fn func_ref(&mut self, ptr: &Expr) -> Result<Expr> {
+        if let Some(p) = self.retyped_param(ptr) {
+            return Ok(Expr::Local(p));
+        }
         match ptr {
-            Expr::Local(n) => Ok(Expr::Choose(Choice::FuncRef, n.clone())),
+            Expr::Local(n) => {
+                self.choose(n, "function pointer", |l, c| l.func_ref(&Expr::Float(c)))
+            }
             Expr::Float(i) => {
                 let f = self.ctx.table_funcs.get(&(*i as u64)).with_context(|| {
                     format!("function pointer {i} is not in `__indirect_function_table`")
@@ -1261,6 +1369,92 @@ impl Lower<'_, '_> {
         let sig = self.ctx.sig_of_type(ty)?;
         let callee = self.fn_cast(&sig, f);
         self.call(callee, &sig, "indirect call")
+    }
+
+    /// A retyped parameter (see `params.rs`) that `e` reads, plus the
+    /// constant offset the analysis allowed for.
+    fn retyped_param(&self, e: &Expr) -> Option<String> {
+        let p = match e {
+            Expr::Local(p) => p,
+            Expr::Bin(BinOp::Add, a, b) => match (&**a, &**b) {
+                (Expr::Float(_), Expr::Local(p)) | (Expr::Local(p), Expr::Float(_)) => p,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.retyped.contains(p).then(|| p.clone())
+    }
+
+    /// Before a call to `callee`: convert the arguments for its retyped
+    /// parameters into the function or string they refer to.
+    fn convert_args(&mut self, reprs: &[Option<ParamRepr>], callee: &str) -> Result<()> {
+        ensure!(
+            self.stack.len() >= reprs.len(),
+            "wasm operand stack underflow"
+        );
+        let base = self.stack.len() - reprs.len();
+        for (i, r) in reprs.iter().enumerate() {
+            let Some(r) = *r else { continue };
+            let arg = self.stack[base + i].0.clone();
+            let ctx = || format!("in argument {i} of `{callee}`");
+            let (e, qt) = match r {
+                ParamRepr::Func { offset } => {
+                    let e = self
+                        .offset_arg(&arg, offset as f32, "function pointer", &|l, a| {
+                            l.func_ref(&a)
+                        })
+                        .with_context(ctx)?;
+                    (e, QcType::Func)
+                }
+                ParamRepr::Str { offset, len } => {
+                    let len = match len {
+                        Len::Const(l) => Expr::Float(l as f32),
+                        Len::Param(j) => self.stack[base + j].0.clone(),
+                    };
+                    let e = self
+                        .offset_arg(&arg, offset as f32, "string literal address", &|l, a| {
+                            l.string_literal(&a, &len)
+                        })
+                        .with_context(ctx)?;
+                    (e, QcType::String)
+                }
+                ParamRepr::Field { offset, ty } => {
+                    let e = self
+                        .offset_arg(&arg, offset as f32, "entity field offset", &|l, a| {
+                            Ok(Expr::Global(l.field_name(&a, ty)?))
+                        })
+                        .with_context(ctx)?;
+                    (e, ty.field_of().expect("fields have value types"))
+                }
+            };
+            self.stack[base + i] = (e, Ty::Known(qt));
+        }
+        Ok(())
+    }
+
+    /// `arm(e + offset)`, where `e` is a constant, a `select` between
+    /// constants or a local known to hold one of several. A retyped parameter
+    /// is passed on as is.
+    fn offset_arg(
+        &mut self,
+        e: &Expr,
+        offset: f32,
+        what: &str,
+        arm: &dyn Fn(&mut Self, Expr) -> Result<Expr>,
+    ) -> Result<Expr> {
+        if let Some(p) = self.retyped_param(e) {
+            return Ok(Expr::Local(p));
+        }
+        match e {
+            Expr::Float(c) => arm(self, Expr::Float(c + offset)),
+            Expr::Select(c, a, b) => Ok(Expr::Select(
+                c.clone(),
+                Box::new(self.offset_arg(a, offset, what, arm)?),
+                Box::new(self.offset_arg(b, offset, what, arm)?),
+            )),
+            Expr::Local(n) => self.choose(n, what, |l, c| arm(l, Expr::Float(c + offset))),
+            e => arm(self, fold(BinOp::Add, Expr::Float(offset), e.clone())),
+        }
     }
 
     /// Make `e` a plain local or global (spilling it if necessary), so that it
@@ -1313,7 +1507,8 @@ impl Lower<'_, '_> {
     fn lanewise(&mut self, op: BinaryOp, a: Expr, b: Expr) -> Expr {
         let (a, b) = (self.vector_lanes(a), self.vector_lanes(b));
         let lane = |x: Expr, y: Expr| {
-            let sel = |c: Expr, t: Expr, f: Expr| Expr::Select(Box::new(c), Box::new(t), Box::new(f));
+            let sel =
+                |c: Expr, t: Expr, f: Expr| Expr::Select(Box::new(c), Box::new(t), Box::new(f));
             let cmp = |op| fold(op, x.clone(), y.clone());
             match op {
                 // `pmin(a, b)` is `b < a ? b : a`, `pmax(a, b)` is `a < b ? b : a`.
@@ -1349,7 +1544,9 @@ impl Lower<'_, '_> {
         // Each source is evaluated once, and only if one of its lanes is used.
         let source = |this: &mut Self, v: Expr, used: bool| match v {
             _ if !used => None,
-            v @ (Expr::Vector(_) | Expr::MakeVector(_) | Expr::Local(_) | Expr::Global(_)) => Some(v),
+            v @ (Expr::Vector(_) | Expr::MakeVector(_) | Expr::Local(_) | Expr::Global(_)) => {
+                Some(v)
+            }
             v => {
                 let v = this.materialize(v);
                 Some(this.simple(v, Ty::Known(QcType::Vector)))
@@ -1423,6 +1620,10 @@ impl Lower<'_, '_> {
     }
 
     fn field_name(&mut self, offset: &Expr, ty: QcType) -> Result<String> {
+        if let Some(p) = self.retyped_param(offset) {
+            // A field reference parameter: `e.(p)`.
+            return Ok(format!("({p})"));
+        }
         let offset = Self::const_i32(offset, "entity field offset")?;
         ensure!(offset >= 0, "negative entity field offset {offset}");
         if StaticData::is_data_addr(offset as u64) {
@@ -1440,13 +1641,16 @@ impl Lower<'_, '_> {
     /// The string literal of `len` bytes at `ptr`. Both must be constants,
     /// or `select`s on the same condition between constants (LLVM sinks
     /// `if (c) lit("a") else lit("bc")` into one call). `ptr` may also be a
-    /// local that is only ever assigned constants, if `len` is constant (see
-    /// [`Expr::Choose`]).
+    /// local known to hold one of several constants, if `len` is constant
+    /// (see [`Self::choose`]).
     fn string_literal(&mut self, ptr: &Expr, len: &Expr) -> Result<Expr> {
+        if let Some(p) = self.retyped_param(ptr) {
+            return Ok(Expr::Local(p));
+        }
         if let (Expr::Local(n), Expr::Float(_)) = (ptr, len) {
-            let len = Self::const_i32(len, "string literal length")?;
-            ensure!(len >= 0, "negative string literal length {len}");
-            return Ok(Expr::Choose(Choice::Str(len as u32), n.clone()));
+            return self.choose(n, "string literal address", |l, c| {
+                l.string_literal(&Expr::Float(c), len)
+            });
         }
         match (ptr, len) {
             (Expr::Select(c, a, b), Expr::Select(lc, la, lb)) if c == lc => Ok(Expr::Select(
@@ -1490,6 +1694,9 @@ impl Lower<'_, '_> {
             .ok_or_else(|| anyhow!("call to unknown function"))?;
         let (name, sig, kind) = (info.name.clone(), info.sig.clone(), info.kind);
         let FuncKind::Intrinsic(intr) = kind else {
+            if let Some(reprs) = self.ctx.param_reprs.get(&func).cloned() {
+                self.convert_args(&reprs, &name)?;
+            }
             return self.call(Expr::FuncName(name.clone()), &sig, &name);
         };
 
@@ -1623,117 +1830,23 @@ impl Lower<'_, '_> {
     }
 }
 
-/// Every constant the local `name` may hold, if it is only ever assigned
-/// constants, `select`s between constants or copies of such locals.
-/// Otherwise, a description of why not. Parameters are never constant:
-/// their value comes from the caller.
-fn local_consts(
-    name: &str,
-    assigns: &HashMap<String, Vec<Expr>>,
-    params: &[(String, Ty)],
-    seen: &mut HashSet<String>,
-) -> std::result::Result<Vec<f32>, String> {
-    if params.iter().any(|(p, _)| p == name) {
-        return Err(format!("`{name}` is a parameter"));
-    }
-    let mut cs = Vec::new();
-    let add = |c: f32, cs: &mut Vec<f32>| {
-        if !cs.contains(&c) {
-            cs.push(c);
-        }
-    };
-    let assigned = assigns
-        .get(name)
-        .ok_or_else(|| format!("`{name}` is never assigned"))?;
-    for v in assigned {
-        match v {
-            Expr::Float(c) => add(*c, &mut cs),
-            Expr::Select(_, a, b) if matches!((&**a, &**b), (Expr::Float(_), Expr::Float(_))) => {
-                for x in [a, b] {
-                    if let Expr::Float(c) = **x {
-                        add(c, &mut cs);
-                    }
-                }
-            }
-            Expr::Local(m) => {
-                if seen.insert(m.clone()) {
-                    for c in local_consts(m, assigns, params, seen)? {
-                        add(c, &mut cs);
-                    }
-                }
-            }
-            other => return Err(format!("`{name}` is assigned `{other:?}`")),
-        }
-    }
-    Ok(cs)
+/// `cs`, sorted and deduplicated.
+fn const_set(cs: impl IntoIterator<Item = f32>) -> Vec<f32> {
+    let mut cs: Vec<f32> = cs.into_iter().collect();
+    cs.sort_by(f32::total_cmp);
+    cs.dedup();
+    cs
 }
 
-/// Call `f` on every statement, including nested ones.
-fn walk_stmts(stmts: &[Stmt], f: &mut impl FnMut(&Stmt)) {
-    for s in stmts {
-        f(s);
-        if let Stmt::If(_, a, b) = s {
-            walk_stmts(a, f);
-            walk_stmts(b, f);
-        }
-    }
-}
-
-/// Call `f` on every expression in `s` (innermost first), including nested
-/// statements.
-fn walk_stmt_exprs(s: &mut Stmt, f: &mut impl FnMut(&mut Expr) -> Result<()>) -> Result<()> {
-    match s {
-        Stmt::Assign(a, b) => {
-            walk_expr(a, f)?;
-            walk_expr(b, f)
-        }
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => walk_expr(e, f),
-        Stmt::If(c, a, b) => {
-            walk_expr(c, f)?;
-            for s in a.iter_mut().chain(b) {
-                walk_stmt_exprs(s, f)?;
-            }
-            Ok(())
-        }
-        Stmt::Return(None) | Stmt::Goto(_) | Stmt::Label(_) | Stmt::Comment(_) => Ok(()),
-    }
-}
-
-fn walk_expr(e: &mut Expr, f: &mut impl FnMut(&mut Expr) -> Result<()>) -> Result<()> {
-    match e {
-        Expr::Bin(_, a, b) => {
-            walk_expr(a, f)?;
-            walk_expr(b, f)?;
-        }
-        Expr::Select(a, b, c) => {
-            walk_expr(a, f)?;
-            walk_expr(b, f)?;
-            walk_expr(c, f)?;
-        }
-        Expr::Un(_, a) | Expr::FnCast(_, a) | Expr::Component(a, _) | Expr::Field(a, _) => {
-            walk_expr(a, f)?
-        }
-        Expr::Call(callee, args) => {
-            walk_expr(callee, f)?;
-            for a in args {
-                walk_expr(a, f)?;
-            }
-        }
-        Expr::MakeVector(parts) => {
-            for p in parts.iter_mut() {
-                walk_expr(p, f)?;
-            }
-        }
-        Expr::Float(_)
-        | Expr::Null
-        | Expr::Local(_)
-        | Expr::Global(_)
-        | Expr::FuncName(_)
-        | Expr::Vector(_)
-        | Expr::Str(_)
-        | Expr::Choose(..) => {}
-    }
-    f(e)
+/// The state after a merge of paths with states `a` and `b`: a local may
+/// hold any constant it may hold on either path.
+fn meet(a: &Known, b: &Known) -> Known {
+    a.iter()
+        .filter_map(|(n, x)| {
+            let cs = const_set(x.iter().chain(b.get(n)?).copied());
+            (cs.len() <= MAX_KNOWN).then(|| (n.clone(), cs))
+        })
+        .collect()
 }
 
 /// `arms[i]` where `v == choices[i]` (`v` must be one of `choices`): a chain

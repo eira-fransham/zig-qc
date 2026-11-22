@@ -1,18 +1,19 @@
 //! Module-level translation: classify imports/exports, lower each function,
 //! then resolve types and render QuakeC source.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use anyhow::{Context as _, Result, bail, ensure};
 use walrus::ir::Value;
 use walrus::{
     ConstExpr, ElementItems, ElementKind, ExportItem, FunctionId, FunctionKind, GlobalId,
-    GlobalKind, ImportKind, Module, TableId, ValType,
+    GlobalKind, ImportKind, LocalId, Module, TableId, ValType,
 };
 
 use crate::data::{DATA_BASE, DataKind, StaticData, relative_offset};
 use crate::lower;
+use crate::params::{self, ParamRepr};
 use crate::qc::{QcType, Sig, Ty, TypeVars};
 use crate::sysdefs::{self, GlobalMap, SysDefs};
 
@@ -172,6 +173,10 @@ pub struct Ctx<'m> {
     /// [`Ctx::user_name`]), with their types.
     pub user_globals: BTreeMap<String, QcType>,
     pub user_fields: BTreeMap<String, QcType>,
+    /// Parameters retyped as functions or strings (see `params.rs`).
+    pub param_reprs: HashMap<FunctionId, Vec<Option<ParamRepr>>>,
+    /// Locals that may alias retyped parameters (see `params.rs`).
+    pub param_aliases: HashMap<FunctionId, HashSet<LocalId>>,
 }
 
 impl Ctx<'_> {
@@ -305,6 +310,8 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         table_funcs: HashMap::new(),
         user_globals: BTreeMap::new(),
         user_fields: BTreeMap::new(),
+        param_reprs: HashMap::new(),
+        param_aliases: HashMap::new(),
     };
 
     // Tables: the LLVM funcref call table, and the table of Zig function
@@ -475,6 +482,24 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                 },
             );
             local_ids.push(f.id());
+        }
+    }
+
+    // Parameters holding functions or string literals become QuakeC ones.
+    let retyped = params::find(&ctx, &local_ids);
+    ctx.param_reprs = retyped.reprs;
+    ctx.param_aliases = retyped.aliases;
+    for (f, reprs) in &ctx.param_reprs {
+        let sig = &mut ctx.funcs.get_mut(f).unwrap().sig;
+        for (p, r) in sig.params.iter_mut().zip(reprs) {
+            match r {
+                Some(ParamRepr::Func { .. }) => *p = Ty::Known(QcType::Func),
+                Some(ParamRepr::Str { .. }) => *p = Ty::Known(QcType::String),
+                Some(ParamRepr::Field { ty, .. }) => {
+                    *p = Ty::Known(ty.field_of().expect("fields have value types"))
+                }
+                None => {}
+            }
         }
     }
 

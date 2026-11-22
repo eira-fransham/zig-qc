@@ -14,6 +14,9 @@ void set_think(float p0);
 void say(float p0);
 void say_if(float p0);
 float pick_time(float p0);
+float reused_local(float p0);
+void br_merge(float p0);
+void loop_forgets(float p0);
 
 void __wasm_a() {
 }
@@ -47,9 +50,46 @@ void say_if(float p0) {
     } else {
         l0 = 1048576;
     }
-    dprint(((l0 == 1048579) ? "no" : "on"));
+    dprint(((l0 == 1048576) ? "on" : "no"));
 }
 
 float pick_time(float p0) {
     return (p0 ? time : frametime);
+}
+
+float reused_local(float p0) {
+    local float l0;
+    l0 = 0;
+    l0 = (p0 == 7);
+    if (l0) {
+        l0 = 1048579;
+    } else {
+        l0 = 1048576;
+    }
+    dprint(((l0 == 1048576) ? "on" : "no"));
+    l0 = (p0 * 2);
+    return l0;
+}
+
+void br_merge(float p0) {
+    local float l0;
+    l0 = 0;
+    l0 = 0;
+    if (p0) {
+        goto blk0;
+    }
+    l0 = 1;
+blk0:
+    self.think = ((l0 == 0) ? __wasm_a : __wasm_b);
+}
+
+void loop_forgets(float p0) {
+    local float l0;
+    l0 = 0;
+loop0:
+    l0 = 1;
+    if (p0) {
+        goto loop0;
+    }
+    self.think = __wasm_b;
 }

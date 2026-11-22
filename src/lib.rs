@@ -3,6 +3,7 @@
 
 pub mod data;
 pub mod lower;
+pub mod params;
 pub mod qc;
 pub mod sysdefs;
 pub mod translate;

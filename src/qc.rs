@@ -13,8 +13,12 @@ pub enum QcType {
     /// `void()`; cast at call sites).
     Func,
     Vector,
-    /// A `.string` field reference.
+    /// Field references: `.float` etc.
+    FloatField,
+    VectorField,
+    EntityField,
     StringField,
+    FuncField,
 }
 
 impl QcType {
@@ -26,8 +30,24 @@ impl QcType {
             QcType::String => "string",
             QcType::Func => "void()",
             QcType::Vector => "vector",
+            QcType::FloatField => ".float",
+            QcType::VectorField => ".vector",
+            QcType::EntityField => ".entity",
             QcType::StringField => ".string",
+            QcType::FuncField => ".void()",
         }
+    }
+
+    /// The type of a reference to a field of this type.
+    pub fn field_of(self) -> Option<QcType> {
+        Some(match self {
+            QcType::Float => QcType::FloatField,
+            QcType::Vector => QcType::VectorField,
+            QcType::Entity => QcType::EntityField,
+            QcType::String => QcType::StringField,
+            QcType::Func => QcType::FuncField,
+            _ => return None,
+        })
     }
 }
 
@@ -219,23 +239,6 @@ pub enum Expr {
     /// collapsed (e.g. into `v_forward`); it is always turned into another
     /// expression before being emitted.
     MakeVector(Box<[Expr; 3]>),
-    /// A value that depends on which of several constants the local holds:
-    /// a function pointer, string literal address or global address that
-    /// LLVM computed on different paths and merged. Only exists during
-    /// lowering, which replaces it once every assignment to the local is
-    /// known.
-    Choose(Choice, String),
-}
-
-/// What an [`Expr::Choose`] computes from the constant in its local.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Choice {
-    /// The function at that `__indirect_function_table` index.
-    FuncRef,
-    /// The string literal of this many bytes at that address.
-    Str(u32),
-    /// The global at that address.
-    Global(QcType),
 }
 
 impl Expr {
@@ -251,7 +254,6 @@ impl Expr {
     pub fn reads_globals(&self) -> bool {
         match self {
             Expr::Global(_) | Expr::Call(..) | Expr::Field(..) => true,
-            Expr::Choose(c, _) => matches!(c, Choice::Global(_)),
             Expr::MakeVector(parts) => parts.iter().any(Expr::reads_globals),
             Expr::Float(_)
             | Expr::Null
@@ -267,7 +269,7 @@ impl Expr {
 
     pub fn reads_local(&self, name: &str) -> bool {
         match self {
-            Expr::Local(n) | Expr::Choose(_, n) => n == name,
+            Expr::Local(n) => n == name,
             Expr::Float(_)
             | Expr::Null
             | Expr::Global(_)
@@ -351,7 +353,6 @@ impl Expr {
                 let _ = write!(out, ".{name}");
             }
             Expr::MakeVector(_) => unreachable!("MakeVector must be materialized before rendering"),
-            Expr::Choose(..) => unreachable!("Choose must be resolved before rendering"),
             Expr::Call(f, args) => {
                 f.render(tv, out);
                 out.push('(');

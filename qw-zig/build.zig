@@ -40,6 +40,10 @@ pub fn build(b: *std.Build) void {
         "--enable-tail-call",
         "--enable-nontrapping-float-to-int",
         "--enable-extended-const",
+        // This pass merges functions that differ only in constants into one
+        // taking them as parameters. Function pointers and string literal
+        // addresses must be constants for QuakeC.
+        "--skip-pass=merge-similar-functions",
     });
     wasm_opt.addArg("-o");
     const optimized = wasm_opt.addOutputFileArg2(package_name, .{});

@@ -92,16 +92,14 @@ fn builtins() {
 
 #[test]
 fn builtin_signature_mismatch_is_an_error() {
-    let err = translate_err(
-        r#"(module (import "builtin" "floor" (func (param i64) (result f32))))"#,
-    );
+    let err =
+        translate_err(r#"(module (import "builtin" "floor" (func (param i64) (result f32))))"#);
     assert!(
         err.contains("parameter 0 should be float, but the import has an i64 handle"),
         "{err}"
     );
-    let err = translate_err(
-        r#"(module (import "builtin" "spawn" (func (param f32) (result i64))))"#,
-    );
+    let err =
+        translate_err(r#"(module (import "builtin" "spawn" (func (param f32) (result i64))))"#);
     assert!(
         err.contains("expected 0 parameters, but the import has 1"),
         "{err}"
@@ -132,7 +130,8 @@ fn fields() {
 
 #[test]
 fn field_errors() {
-    let load = r#"(import "env" "__quakec_load_entity_field_float" (func (param i64 i32) (result f32)))"#;
+    let load =
+        r#"(import "env" "__quakec_load_entity_field_float" (func (param i64 i32) (result f32)))"#;
     // A float access to a string field.
     let err = translate_err(&format!(
         r#"(module {load} (func (export "f") (param i64) (result f32) (call 0 (local.get 0) (i32.const 28))))"#
@@ -249,7 +248,48 @@ fn string_literal_errors() {
 #[test]
 fn merged_constants() {
     insta::assert_snapshot!(translate_wat("merged_constants.wat"));
-    check_compiles(&wat::parse_file(fixture("merged_constants.wat")).unwrap(), "");
+    check_compiles(
+        &wat::parse_file(fixture("merged_constants.wat")).unwrap(),
+        "",
+    );
+}
+
+#[test]
+fn merged_functions() {
+    insta::assert_snapshot!(translate_wat("merged_functions.wat"));
+    check_compiles(
+        &wat::parse_file(fixture("merged_functions.wat")).unwrap(),
+        "",
+    );
+}
+
+#[test]
+fn merged_function_errors() {
+    let base = r#"(import "env" "__indirect_function_table" (table 1 funcref))
+        (import "env" "__table_base" (global $tb i32))
+        (import "env" "__quakec_func_ref" (func $func_ref (param i32) (result funcref)))
+        (elem (global.get $tb) func $a)
+        (func $a)
+        (func $use (param i32) (result funcref) (call $func_ref (local.get 0)))"#;
+    // A caller passing a computed function pointer.
+    let err = translate_err(&format!(
+        r#"(module {base} (func (export "f") (param i32) (result funcref)
+            (call $use (i32.mul (local.get 0) (i32.const 2)))))"#
+    ));
+    assert!(err.contains("in argument 0 of `__wasm_use`"), "{err}");
+    assert!(err.contains("is not a constant"), "{err}");
+    // A parameter also used as a number isn't retyped.
+    let err = translate_err(&format!(
+        r#"(module {base}
+            (func $g (param i32) (result funcref)
+              (drop (i32.mul (local.get 0) (i32.const 2)))
+              (call $func_ref (local.get 0)))
+            (func (export "f") (result funcref) (call $g (global.get $tb))))"#
+    ));
+    assert!(
+        err.contains("function pointer in local `p0` is not a constant on every path here"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -265,7 +305,7 @@ fn merged_constant_errors() {
             (call $func_ref (local.get 0))))"#
     ));
     assert!(
-        err.contains("function pointer in local `p0` is not always a constant: `p0` is a parameter"),
+        err.contains("function pointer in local `p0` is not a constant on every path here"),
         "{err}"
     );
     // A local that is sometimes assigned a computed value.
@@ -275,7 +315,10 @@ fn merged_constant_errors() {
             (if (local.get 0) (then (local.set 1 (i32.mul (local.get 0) (i32.const 2)))))
             (call $func_ref (local.get 1))))"#
     ));
-    assert!(err.contains("is not always a constant: `l0` is assigned"), "{err}");
+    assert!(
+        err.contains("function pointer in local `l0` is not a constant on every path here"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -284,7 +327,10 @@ fn stack_pointer_use_is_an_error() {
         r#"(module (import "env" "__stack_pointer" (global $sp (mut i32)))
             (func (export "f") (global.set $sp (i32.sub (global.get $sp) (i32.const 16)))))"#,
     );
-    assert!(err.contains("uses the shadow stack (`__stack_pointer`)"), "{err}");
+    assert!(
+        err.contains("uses the shadow stack (`__stack_pointer`)"),
+        "{err}"
+    );
 }
 
 #[test]
