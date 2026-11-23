@@ -652,8 +652,7 @@ fn compatible(w: Type, q: QcType) -> bool {
     match w {
         Type::F32 => q == QcType::Float,
         Type::V128 => q == QcType::Vector,
-        Type::I32 => !matches!(q, QcType::Vector | QcType::Entity | QcType::Void),
-        Type::I64 => matches!(q, QcType::Entity | QcType::String) || q.name().starts_with('.'),
+        Type::I32 => !matches!(q, QcType::Vector | QcType::Void),
         _ => false,
     }
 }
@@ -732,7 +731,6 @@ fn apply_relocs(module: &Module, f: Func, data: &mut StaticData) -> Result<()> {
 fn describe_type(t: Type) -> String {
     match t {
         Type::I32 => "an i32".into(),
-        Type::I64 => "an i64 handle".into(),
         Type::F32 => "an f32".into(),
         Type::V128 => "a v128".into(),
         t => format!("{t:?}"),

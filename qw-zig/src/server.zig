@@ -107,7 +107,7 @@ pub fn t_movetarget() callconv(.c) void {
         q.sound(self, q.CHAN_VOICE, S("ogre/ogdrag.wav"), 1, q.ATTN_IDLE); // play chainsaw drag sound
 
     //dprint ("t_movetarget\n");
-    self.set(q.movetarget, q.find(q.world.get(), q.fieldRef(.targetname), other.get(.target)));
+    self.set(q.movetarget, q.find(q.world.get(), .targetname, other.get(.target)));
     self.set(.goalentity, self.get(q.movetarget));
     self.set(.ideal_yaw, q.vectoyaw(self.get(.goalentity).get(.origin) - self.get(.origin)));
     if (self.get(q.movetarget).isNull()) {

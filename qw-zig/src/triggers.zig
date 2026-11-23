@@ -375,7 +375,7 @@ pub fn teleport_touch() callconv(.c) void {
     // put a tfog where the player was
     spawn_tfog(other.get(.origin));
 
-    const t = q.find(q.world.get(), q.fieldRef(.targetname), self.get(.target));
+    const t = q.find(q.world.get(), .targetname, self.get(.target));
     if (t.isNull())
         q.objerror(S("couldn't find target"));
 

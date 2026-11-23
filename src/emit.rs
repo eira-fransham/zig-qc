@@ -410,10 +410,27 @@ impl Emitter<'_, '_> {
     fn operand(&mut self, site: Site, idx: u32, v: Value) -> Result<Expr> {
         let body = self.body;
         let v = body.resolve_alias(v);
+        if const_val(body, v).is_none()
+            && self.inf.funcs[&self.inst.func].has_value(v)
+            && let (Kind::Entity, bias) = self.inf.value(self.inst, v)?
+        {
+            ensure!(
+                bias == 0,
+                "a pointer to an entity's field is used as a value (only field accesses, \
+                 `e.field`, are supported)"
+            );
+        }
+        self.address(site, idx, v)
+    }
+
+    /// Operand `idx` of `site`, `v`, which may be a pointer to an entity's
+    /// field (an address).
+    fn address(&mut self, site: Site, idx: u32, v: Value) -> Result<Expr> {
+        let body = self.body;
+        let v = body.resolve_alias(v);
         if let Some(c) = const_val(body, v) {
             let (k, bias) = self.inf.operand_of(self.inst, body, site, idx, v)?;
-            let wasm = infer::wasm_ty(body, v).unwrap_or(Type::I32);
-            return self.constant(c, k, bias, wasm);
+            return self.constant(c, k, bias);
         }
         if let Some(e) = const_expr(body, v) {
             return e;
@@ -438,14 +455,14 @@ impl Emitter<'_, '_> {
     }
 
     /// A constant `c`, used as a value of kind `k` with bias `bias`.
-    fn constant(&mut self, c: i64, k: Kind, bias: i64, wasm: Type) -> Result<Expr> {
-        if wasm == Type::I64 {
-            ensure!(c == 0, "unsupported {k} constant {c}");
-            return Ok(Expr::Null);
-        }
+    fn constant(&mut self, c: i64, k: Kind, bias: i64) -> Result<Expr> {
         let addr = c.wrapping_add(bias);
         match k {
             Kind::StackOffset => bail!("internal error: an unreified shadow stack address"),
+            Kind::Entity => {
+                ensure!(addr == 0, "entity constant {addr} (only null, 0, is supported)");
+                Ok(Expr::Null)
+            }
             Kind::Float => {
                 if c.unsigned_abs() > MAX_EXACT_INT as u64 {
                     self.ctx.warnings.push(format!(
@@ -477,7 +494,7 @@ impl Emitter<'_, '_> {
                 })?;
                 Ok(Expr::Str(bytes))
             }
-            Kind::Entity | Kind::Vector => bail!("unsupported {k} constant {c}"),
+            Kind::Vector => bail!("unsupported {k} constant {c}"),
         }
     }
 
@@ -664,6 +681,10 @@ impl Emitter<'_, '_> {
         let ValueDef::Operator(op, _, _) = &body.values[v] else {
             return Ok(());
         };
+        if let Some(names) = self.inf.field_names(self.inst.func, v) {
+            let names = names.to_vec();
+            return self.field_access(v, op, &names);
+        }
         use Operator as O;
         match op {
             O::Nop => {}
@@ -696,7 +717,7 @@ impl Emitter<'_, '_> {
                         x == 0 || *op == O::I32Add,
                         "{k} value computed as `{c} - x`"
                     );
-                    let e = self.operand(Site::Inst(v), x as u32, a[x])?;
+                    let e = self.address(Site::Inst(v), x as u32, a[x])?;
                     self.define(v, e)?;
                 }
             }
@@ -1140,12 +1161,60 @@ impl Emitter<'_, '_> {
         bin(BinOp::Ne, cmp, bin(BinOp::Ne, neg(x), neg(y)))
     }
 
+    /// A load or store `v` of the entity fields `names` (one per cell).
+    fn field_access(&mut self, v: Value, op: &Operator, names: &[String]) -> Result<()> {
+        let body = self.body;
+        let a = args(body, v);
+        let (store, _, cells) = crate::memory::cells(op)
+            .ok()
+            .flatten()
+            .expect("a memory access");
+        let ent = self.address(Site::Inst(v), 0, a[0])?;
+        let ent = self.simple(ent, QcType::Entity);
+        let field = |n: &String| Expr::Field(Box::new(ent.clone()), n.clone());
+        let lanes: Vec<Option<u8>> = cells.iter().map(|c| c.lane).collect();
+        if store {
+            let x = self.operand(Site::Inst(v), 1, a[1])?;
+            let x = if lanes.len() > 1 {
+                self.simple(x, QcType::Vector)
+            } else {
+                self.materialize(x)
+            };
+            let mut stmts = Vec::new();
+            for (lane, n) in lanes.iter().zip(names) {
+                let rhs = match lane {
+                    Some(l) => self.extract_lane(x.clone(), *l),
+                    None => x.clone(),
+                };
+                stmts.push(Stmt::Assign(field(n), rhs));
+            }
+            self.flush()?;
+            for s in stmts {
+                self.emit(s);
+            }
+            return Ok(());
+        }
+        if lanes[0].is_none() {
+            return self.define(v, field(&names[0]));
+        }
+        // Lanes into a vector: the one loaded into, or zeros.
+        let mut vec = match op {
+            Operator::V128Load32Lane { .. } | Operator::V128Load64Lane { .. } => {
+                self.operand(Site::Inst(v), 1, a[1])?
+            }
+            _ => Expr::Vector([0.0; 3]),
+        };
+        for (lane, n) in lanes.iter().zip(names) {
+            vec = self.replace_lane(vec, lane.unwrap(), field(n));
+        }
+        self.define(v, whole_field(vec))
+    }
+
     fn sig_of_type(&mut self, sig: waffle::Signature, v: Value) -> Result<Sig> {
         let s = &self.ctx.module.signatures[sig];
         let default = |t: &Type| -> Result<QcType> {
             Ok(match t {
                 Type::I32 | Type::F32 => QcType::Float,
-                Type::I64 => QcType::Entity,
                 Type::V128 => QcType::Vector,
                 other => bail!("unsupported type {other:?}"),
             })
@@ -1185,7 +1254,7 @@ impl Emitter<'_, '_> {
                     .data
                     .read_u32(a as u64)
                     .ok_or_else(|| anyhow!("load from address {a}, outside of static data"))?;
-                let e = self.constant(x as i64, k, 0, Type::I32)?;
+                let e = self.constant(x as i64, k, 0)?;
                 return self.define(v, e);
             }
             self.ctx.pointer_accessors.insert(k.qc());
@@ -1885,6 +1954,22 @@ fn fold_vector(op: BinOp, a: Expr, b: Expr) -> Expr {
         }
         _ => Expr::Bin(op, Box::new(a), Box::new(b)),
     }
+}
+
+/// `e.f_x, e.f_y, e.f_z` as a vector is `e.f`.
+fn whole_field(v: Expr) -> Expr {
+    if let Expr::MakeVector(parts) = &v
+        && let [Expr::Field(a, x), Expr::Field(b, y), Expr::Field(c, z)] = &**parts
+        && a == b
+        && b == c
+        && let (Some(f), Some(g), Some(h)) =
+            (x.strip_suffix("_x"), y.strip_suffix("_y"), z.strip_suffix("_z"))
+        && f == g
+        && g == h
+    {
+        return Expr::Field(a.clone(), f.to_string());
+    }
+    v
 }
 
 /// Remove `x = x` assignments (left by sharing locals).

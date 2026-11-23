@@ -28,6 +28,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use waffle::{Block, FunctionBody, Global, Operator as O, Terminator, Type, Value, ValueDef};
 
+use crate::memory::{Cell, CellAccess, cells};
 use crate::qc::QcType;
 
 /// The most offsets a stack address may have before it is unknown.
@@ -92,105 +93,6 @@ impl Fact {
             None => Fact::Unknown,
         }
     }
-}
-
-/// What a 4-byte (or other) slot holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Cell {
-    I32,
-    F32,
-    I64,
-    /// A vector lane: an `i32` or `f32`, whichever the other accesses say.
-    Lane,
-    /// The low 8 or 16 bits of an `i32`.
-    Narrow(u8),
-}
-
-impl Cell {
-    fn width(self) -> i64 {
-        match self {
-            Cell::I32 | Cell::F32 | Cell::Lane => 4,
-            Cell::I64 => 8,
-            Cell::Narrow(w) => w as i64 / 8,
-        }
-    }
-
-    fn name(self) -> String {
-        match self {
-            Cell::I32 => "i32".into(),
-            Cell::F32 => "f32".into(),
-            Cell::I64 => "i64".into(),
-            Cell::Lane => "a vector lane".into(),
-            Cell::Narrow(w) => format!("an {w}-bit integer"),
-        }
-    }
-}
-
-/// One cell a memory access touches: its offset from the address, what it
-/// holds, and its vector lane (for vector accesses).
-struct CellAccess {
-    rel: i64,
-    cell: Cell,
-    lane: Option<u8>,
-}
-
-/// The cells a load or store accesses, `Ok(None)` if `op` isn't one, or why
-/// it isn't supported on the stack.
-fn cells(op: &O) -> Result<Option<(bool, u32, Vec<CellAccess>)>, String> {
-    let one = |cell| {
-        vec![CellAccess {
-            rel: 0,
-            cell,
-            lane: None,
-        }]
-    };
-    let lanes = |ls: &[u8]| {
-        ls.iter()
-            .enumerate()
-            .map(|(i, &l)| CellAccess {
-                rel: 4 * i as i64,
-                cell: Cell::Lane,
-                lane: Some(l),
-            })
-            .collect()
-    };
-    Ok(Some(match op {
-        O::I32Load { memory } => (false, memory.offset, one(Cell::I32)),
-        O::F32Load { memory } => (false, memory.offset, one(Cell::F32)),
-        O::I64Load { memory } => (false, memory.offset, one(Cell::I64)),
-        O::I32Load8U { memory } => (false, memory.offset, one(Cell::Narrow(8))),
-        O::I32Load16U { memory } => (false, memory.offset, one(Cell::Narrow(16))),
-        O::I32Store { memory } => (true, memory.offset, one(Cell::I32)),
-        O::F32Store { memory } => (true, memory.offset, one(Cell::F32)),
-        O::I64Store { memory } => (true, memory.offset, one(Cell::I64)),
-        O::I32Store8 { memory } => (true, memory.offset, one(Cell::Narrow(8))),
-        O::I32Store16 { memory } => (true, memory.offset, one(Cell::Narrow(16))),
-        O::V128Load { memory } => (false, memory.offset, lanes(&[0, 1, 2, 3])),
-        O::V128Store { memory } => (true, memory.offset, lanes(&[0, 1, 2, 3])),
-        O::V128Load32Zero { memory } => (false, memory.offset, lanes(&[0])),
-        O::V128Load64Zero { memory } => (false, memory.offset, lanes(&[0, 1])),
-        O::V128Load32Lane { memory, lane } => (false, memory.offset, lanes(&[*lane])),
-        O::V128Load64Lane { memory, lane } => {
-            (false, memory.offset, lanes(&[2 * lane, 2 * lane + 1]))
-        }
-        O::V128Store32Lane { memory, lane } => (true, memory.offset, lanes(&[*lane])),
-        O::V128Store64Lane { memory, lane } => {
-            (true, memory.offset, lanes(&[2 * lane, 2 * lane + 1]))
-        }
-        O::I32Load8S { .. } | O::I32Load16S { .. } => {
-            return Err("a sign-extending load of a narrow local is not supported".into());
-        }
-        op if is_memory(op) => {
-            return Err(format!("`{op}` on a local is not supported"));
-        }
-        _ => return Ok(None),
-    }))
-}
-
-/// Whether `op` accesses memory (any load, store or bulk memory op).
-fn is_memory(op: &O) -> bool {
-    let s = format!("{op:?}");
-    s.contains("Load") || s.contains("Store") || s.starts_with("Memory")
 }
 
 fn args(body: &FunctionBody, v: Value) -> Vec<Value> {
@@ -416,6 +318,9 @@ fn check(
             if !a.iter().any(|&x| stack(x)) {
                 continue;
             }
+            if matches!(op, O::I32Load8S { .. } | O::I32Load16S { .. }) {
+                return Err("a sign-extending load of a narrow local is not supported".into());
+            }
             if let Some((store, offset, cs)) = cells(op)? {
                 if store && stack(a[1]) {
                     return Err("the address of a local is stored in memory".into());
@@ -531,7 +436,6 @@ fn slots(accesses: &[Access]) -> Result<BTreeMap<i64, Slot>, String> {
         let (ty, mask) = match cell {
             Cell::I32 => (Type::I32, None),
             Cell::F32 | Cell::Lane => (Type::F32, None),
-            Cell::I64 => (Type::I64, None),
             Cell::Narrow(w) => (Type::I32, Some(if w == 8 { 0xff } else { 0xffff })),
         };
         slots.insert(at, Slot { width, ty, mask });
@@ -593,7 +497,6 @@ fn add_inst(
 
 fn zero(ty: Type) -> O {
     match ty {
-        Type::I64 => O::I64Const { value: 0 },
         Type::F32 => O::F32Const { value: 0 },
         _ => O::I32Const { value: 0 },
     }

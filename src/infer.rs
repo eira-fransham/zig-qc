@@ -37,9 +37,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail, ensure};
 use waffle::{Block, Func, FunctionBody, Global, Operator, Terminator, Type, Value, ValueDef};
 
+use crate::memory::{self, Cell, CellAccess};
 use crate::qc::QcType;
 use crate::translate::{Ctx, FuncKind, Intrinsic};
 
@@ -91,13 +92,12 @@ impl Kind {
     /// Whether values of this kind are addresses resolved at compile time
     /// (see the module docs on offsets).
     fn addressed(self) -> bool {
-        matches!(self, Kind::Func | Kind::String | Kind::Field(_))
+        matches!(self, Kind::Func | Kind::String | Kind::Field(_) | Kind::Entity)
     }
 
     /// The kind of an unconstrained value of wasm type `t`.
     fn default_for(t: Type) -> Kind {
         match t {
-            Type::I64 => Kind::Entity,
             Type::V128 => Kind::Vector,
             _ => Kind::Float,
         }
@@ -291,6 +291,14 @@ pub struct Instance {
     pub callees: HashMap<Value, usize>,
 }
 
+impl FuncTypes {
+    /// Whether `v` has a type of its own (it isn't a constant, and has a
+    /// result).
+    pub fn has_value(&self, v: Value) -> bool {
+        self.vals.contains_key(&v)
+    }
+}
+
 pub struct Infer {
     uf: Uf,
     pub funcs: HashMap<Func, FuncTypes>,
@@ -298,6 +306,25 @@ pub struct Infer {
     /// Imported functions without a known signature (unknown builtins).
     imports: HashMap<Func, (Vec<Var>, Vec<Var>)>,
     quantified: Vec<Vec<Var>>,
+    /// Loads and stores through non-constant addresses, in the SCC being
+    /// solved (see [`Infer::resolve_accesses`]).
+    pending: Vec<Access>,
+    /// The entity fields accessed by each load or store that accesses one,
+    /// a name per cell (see `memory::cells`).
+    fields: HashMap<(Func, Value), Vec<String>>,
+}
+
+/// A load or store through a non-constant address: an entity field access
+/// if the address is an entity, else a dynamic access of static data.
+struct Access {
+    func: Func,
+    inst: Value,
+    /// The address value and its variable.
+    addr: (Value, Var),
+    offset: u32,
+    cells: Vec<CellAccess>,
+    /// The loaded or stored scalar (not for vector accesses).
+    scalar: Option<Var>,
 }
 
 /// Follow aliases.
@@ -383,6 +410,8 @@ impl Infer {
             globals: HashMap::new(),
             imports: HashMap::new(),
             quantified: Vec::new(),
+            pending: Vec::new(),
+            fields: HashMap::new(),
         };
         for (g, data) in ctx.module.globals.entries() {
             let v = inf.uf.fresh(data.ty);
@@ -425,6 +454,7 @@ impl Infer {
                     bail!("in `{name}`: {}", stack_error(&failure.reason));
                 }
             }
+            inf.resolve_accesses(ctx)?;
             let mut q = Vec::new();
             for &f in &scc {
                 let ft = &inf.funcs[&f];
@@ -451,8 +481,21 @@ impl Infer {
     fn declare(&mut self, ctx: &Ctx<'_>, f: Func, scc: usize) -> Result<()> {
         let body = Self::body(ctx, f);
         let mut vals = HashMap::new();
+        let no_i64 = |t: Type| {
+            if t == Type::I64 {
+                bail!(
+                    "64-bit integers aren't supported (in `{}`): QuakeC numbers are floats",
+                    ctx.funcs[&f].name
+                );
+            }
+            Ok(())
+        };
+        for t in body.rets.iter().chain(body.blocks[body.entry].params.iter().map(|(t, _)| t)) {
+            no_i64(*t)?;
+        }
         for (block, b) in body.blocks.entries() {
             for &(t, v) in &b.params {
+                no_i64(t)?;
                 vals.insert(v, self.uf.fresh(t));
             }
             for &v in &b.insts {
@@ -463,6 +506,7 @@ impl Infer {
                     match body.type_pool[*tys] {
                         [] => {}
                         [t] => {
+                            no_i64(t)?;
                             vals.insert(v, self.uf.fresh(t));
                         }
                         _ => bail!("multi-value results are not supported (in block {block})"),
@@ -568,6 +612,10 @@ impl Infer {
             Ok(())
         };
 
+        if let Some((store, offset, cells)) = memory::cells(op).map_err(|e| anyhow!(e))? {
+            return self.access(body, f, v, store, offset, cells, &why);
+        }
+
         use Operator as O;
         match op {
             // `x + k`, `x - k`: an offset (see the module docs).
@@ -649,16 +697,6 @@ impl Infer {
                 "reference types are not supported; use plain function pointers \
                  (`*const fn`) for QuakeC functions"
             ),
-            // A number, or a pointer stored in static data (a string
-            // literal or a function, see `__wasm_apply_data_relocs`): typed by
-            // its uses.
-            O::I32Load { .. } => {
-                let x = opnd(self, 0);
-                self.uf.set_kind(x, Kind::Float, &why("a memory address"))?;
-                if let Some(r) = res {
-                    self.uf.exact(r, &why("a load"))?;
-                }
-            }
             op => {
                 // Everything else works on numbers or vectors, by wasm type.
                 let mut vars: Vec<Var> = (0..a.len()).map(|i| opnd(self, i)).collect();
@@ -675,6 +713,189 @@ impl Infer {
             }
         }
         Ok(())
+    }
+
+    /// A load or store of `cells` at `offset` from its address operand.
+    #[allow(clippy::too_many_arguments)]
+    fn access(
+        &mut self,
+        body: &FunctionBody,
+        f: Func,
+        v: Value,
+        store: bool,
+        offset: u32,
+        cells: Vec<CellAccess>,
+        why: &dyn Fn(&str) -> String,
+    ) -> Result<()> {
+        let a = args(body, v);
+        let site = Site::Inst(v);
+        let addr = self.operand(body, f, site, 0, a[0]);
+        let res = self.val(f, v);
+        let vector = cells[0].lane.is_some();
+        // The vector stored, or loaded into.
+        if vector {
+            if let Some(r) = res {
+                self.uf.set_kind(r, Kind::Vector, &why("a vector load"))?;
+            }
+            if a.len() > 1 {
+                let x = self.operand(body, f, site, 1, a[1]);
+                self.uf.set_kind(x, Kind::Vector, &why("a vector"))?;
+            }
+        }
+        let scalar = match (vector, store) {
+            (true, _) => None,
+            (false, true) => Some(self.operand(body, f, site, 1, a[1])),
+            (false, false) => res,
+        };
+        if let Some(x) = scalar
+            && cells[0].cell != Cell::I32
+        {
+            self.uf.set_kind(x, Kind::Float, &why("a float load or store"))?;
+        }
+        let access = Access {
+            func: f,
+            inst: v,
+            addr: (resolve(body, a[0]), addr),
+            offset,
+            cells,
+            scalar,
+        };
+        if const_val(body, a[0]).is_some() {
+            // A QuakeC global, or static data.
+            self.memory_access(&access, why)
+        } else {
+            self.pending.push(access);
+            Ok(())
+        }
+    }
+
+    /// `access` is of a QuakeC global or static data: its address is a
+    /// number. An `i32` loaded from static data may be a pointer (a string
+    /// literal or a function, see `__wasm_apply_data_relocs`): typed by its
+    /// uses.
+    fn memory_access(&mut self, access: &Access, why: &dyn Fn(&str) -> String) -> Result<()> {
+        self.uf
+            .set_kind(access.addr.1, Kind::Float, &why("a memory address"))?;
+        if let Some(x) = access.scalar
+            && access.cells[0].cell == Cell::I32
+        {
+            self.uf.exact(x, &why("a load or store"))?;
+        }
+        Ok(())
+    }
+
+    /// `access` is of entity fields: type what is loaded or stored by the
+    /// fields.
+    fn field_access(&mut self, ctx: &Ctx<'_>, access: &Access, why: &dyn Fn(&str) -> String) -> Result<()> {
+        let (r, pot) = self.uf.find(access.addr.1);
+        let anchor = match &self.uf.class[r as usize].anchor {
+            Some((a, _)) => *a,
+            None => {
+                self.uf.exact(access.addr.1, &why("an entity"))?;
+                pot
+            }
+        };
+        let mut names = Vec::new();
+        for c in &access.cells {
+            let byte = pot - anchor + access.offset as i64 + c.rel;
+            ensure!(
+                byte >= 0 && byte % 4 == 0,
+                "entity field access at byte offset {byte}, which isn't a field (fields are 4 bytes)"
+            );
+            let slot = (byte / 4) as u32;
+            let Some((name, ty)) = ctx.defs.field_cell(slot) else {
+                bail!(
+                    "entity field offset {slot} is not a system field (user fields need `get` and \
+                     `set`)"
+                );
+            };
+            let k = Kind::from_qc(ty).expect("a value type");
+            let ok = match c.cell {
+                Cell::F32 | Cell::Lane => k == Kind::Float,
+                Cell::I32 => matches!(k, Kind::Entity | Kind::String | Kind::Func),
+                Cell::Narrow(_) => false,
+            };
+            ensure!(
+                ok,
+                "the {} field `{name}` is accessed as {}",
+                ty.name(),
+                c.cell.name()
+            );
+            if let Some(x) = access.scalar {
+                let what = why(&format!("the field `{name}`"));
+                if k == Kind::Float {
+                    self.uf.set_kind(x, k, &what)?;
+                } else {
+                    self.uf.typed(x, k, &what)?;
+                }
+            }
+            names.push(name);
+        }
+        self.fields.insert((access.func, access.inst), names);
+        Ok(())
+    }
+
+    /// Resolve the pending accesses of the SCC just constrained: each is an
+    /// entity field access or a static data access, by its address's kind.
+    /// An address whose kind nothing else determines is an entity: static
+    /// data addresses are computed from constants, so are numbers.
+    fn resolve_accesses(&mut self, ctx: &Ctx<'_>) -> Result<()> {
+        let mut pending = std::mem::take(&mut self.pending);
+        while !pending.is_empty() {
+            let mut progress = false;
+            let mut rest = Vec::new();
+            for access in pending {
+                let fname = &ctx.funcs[&access.func].name;
+                let why = |what: &str| format!("{what} in `{fname}`");
+                let body = Self::body(ctx, access.func);
+                let (r, _) = self.uf.find(access.addr.1);
+                let result = match self.uf.class[r as usize].kind.as_ref().map(|(k, _)| *k) {
+                    None => {
+                        rest.push(access);
+                        continue;
+                    }
+                    Some(Kind::Entity) => self.field_access(ctx, &access, &why),
+                    Some(Kind::Float) => self.memory_access(&access, &why),
+                    Some(k) => Err(anyhow!("a memory access through a {k}")),
+                };
+                result.map_err(|e| {
+                    e.context(format!(
+                        "at {} = {} in `{fname}`",
+                        access.inst,
+                        describe(body, access.inst)
+                    ))
+                })?;
+                progress = true;
+            }
+            pending = rest;
+            if !progress && let Some(access) = pending.first() {
+                // Default the address to an entity: the value it is an
+                // offset from.
+                let body = Self::body(ctx, access.func);
+                let mut base = access.addr.0;
+                while let ValueDef::Operator(Operator::I32Add | Operator::I32Sub, _, _) =
+                    &body.values[base]
+                {
+                    let a = args(body, base);
+                    match (const_val(body, a[0]), const_val(body, a[1])) {
+                        (None, Some(_)) => base = a[0],
+                        (Some(_), None) => base = a[1],
+                        _ => break,
+                    }
+                }
+                let var = self.funcs[&access.func].vals[&base];
+                let fname = &ctx.funcs[&access.func].name;
+                self.uf
+                    .typed(var, Kind::Entity, &format!("a memory address (an entity) in `{fname}`"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The entity fields accessed by load or store `v` of `f`, if it
+    /// accesses entity fields: a name per cell (see `memory::cells`).
+    pub fn field_names(&self, f: Func, v: Value) -> Option<&[String]> {
+        self.fields.get(&(f, v)).map(Vec::as_slice)
     }
 
     fn call(
@@ -803,7 +1024,7 @@ impl Infer {
                 kind(uf, res.unwrap(), Kind::Float, None)?;
             }
             I::FieldRefString => {
-                kind(uf, ops[0], Kind::Field(QcType::String), Some(0))?;
+                kind(uf, ops[], Kind::Field(QcType::String), Some(0))?;
                 uf.exact(ops[0], &why(Some(0)))?;
                 uf.union(res.unwrap(), ops[0], 0, &why(None))?;
             }

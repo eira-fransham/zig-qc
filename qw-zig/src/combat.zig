@@ -139,7 +139,7 @@ pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32)
         // Set kickback for smaller weapons
         //Zoid -- use normal NQ kickback
         //      // Read: only if it's not yourself doing the damage
-        //      if ( (damage < 60) & ((attacker.classname == "player") & (targ.classname == "player")) & ( attacker.netname != targ.netname))
+        //      if ( (damage < 6) & ((attacker.classname == "player") & (targ.classname == "player")) & ( attacker.netname != targ.netname))
         //          targ.velocity = targ.velocity + dir * damage * 11;
         //      else
         // Otherwise, these rules apply to rockets and grenades

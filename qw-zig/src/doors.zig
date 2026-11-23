@@ -313,7 +313,7 @@ pub fn LinkDoors() callconv(.c) void {
         if (self.get(.message).neq(S("")))
             starte.set(.message, self.get(.message));
 
-        t = q.find(t, q.fieldRef(.classname), self.get(.classname));
+        t = q.find(t, .classname, self.get(.classname));
         if (t.isNull()) {
             self.set(.enemy, starte); // make the chain a loop
 

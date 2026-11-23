@@ -51,9 +51,9 @@ pub fn SpectatorImpulseCommand() callconv(.c) void {
         // teleport the spectator to the next spawn point
         // note that if the spectator is tracking, this doesn't do
         // much
-        self.set(.goalentity, q.find(self.get(.goalentity), q.fieldRef(.classname), S("info_player_deathmatch")));
+        self.set(.goalentity, q.find(self.get(.goalentity), .classname, S("info_player_deathmatch")));
         if (self.get(.goalentity).eql(q.world.get()))
-            self.set(.goalentity, q.find(self.get(.goalentity), q.fieldRef(.classname), S("info_player_deathmatch")));
+            self.set(.goalentity, q.find(self.get(.goalentity), .classname, S("info_player_deathmatch")));
         if (self.get(.goalentity).neq(q.world.get())) {
             q.setorigin(self, self.get(.goalentity).get(.origin));
             self.set(.angles, self.get(.goalentity).get(.angles));

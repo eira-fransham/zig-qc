@@ -192,7 +192,7 @@ pub export fn user_defs(e: Entity) void {
     on_done.set(defs.func(bump));
     if (defs.fnNeq(e.get(.think), defs.func(helperThink))) e.set(.nextthink, defs.time.get());
     if (!defs.fnIsNull(e.get(th_pain))) defs.callAs(fn (Entity, f32) callconv(.c) void, e.get(th_pain))(activator.get(), 5);
-    const spot = defs.find(defs.world.get(), defs.fieldRef(.classname), String.lit("info_player_start"));
+    const spot = defs.find(defs.world.get(), .classname, String.lit("info_player_start"));
     if (!spot.isNull()) e.set(.origin, spot.get(.origin));
 }
 

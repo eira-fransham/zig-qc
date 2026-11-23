@@ -107,23 +107,21 @@ pub fn DecodeLevelParms() callconv(.c) void {
 ///
 /// Returns the entity to view from
 pub fn FindIntermission() callconv(.c) Entity {
-    const classname = q.fieldRef(.classname);
-
     // look for info_intermission first
-    var spot = q.find(q.world.get(), classname, S("info_intermission"));
+    var spot = q.find(q.world.get(), .classname, S("info_intermission"));
     if (!spot.isNull()) { // pick a random one
         var cyc = q.random() * 4;
         while (cyc > 1) {
-            spot = q.find(spot, classname, S("info_intermission"));
+            spot = q.find(spot, .classname, S("info_intermission"));
             if (spot.isNull())
-                spot = q.find(spot, classname, S("info_intermission"));
+                spot = q.find(spot, .classname, S("info_intermission"));
             cyc = cyc - 1;
         }
         return spot;
     }
 
     // then look for the start position
-    spot = q.find(q.world.get(), classname, S("info_player_start"));
+    spot = q.find(q.world.get(), .classname, S("info_player_start"));
     if (!spot.isNull())
         return spot;
 
@@ -189,14 +187,14 @@ pub fn execute_changelevel() callconv(.c) void {
     q.WriteAngle(q.MSG_ALL, mangle[1]);
     q.WriteAngle(q.MSG_ALL, mangle[2]);
 
-    q.other.set(q.find(q.world.get(), q.fieldRef(.classname), S("player")));
+    q.other.set(q.find(q.world.get(), .classname, S("player")));
     while (q.other.get().neq(q.world.get())) {
         const other = q.other.get();
         other.set(.takedamage, q.DAMAGE_NO);
         other.set(.solid, q.SOLID_NOT);
         other.set(.movetype, q.MOVETYPE_NONE);
         other.set(.modelindex, 0);
-        q.other.set(q.find(other, q.fieldRef(.classname), S("player")));
+        q.other.set(q.find(other, .classname, S("player")));
     }
 }
 
@@ -282,12 +280,11 @@ pub fn CheckSpawnPoint(v: Vector) callconv(.c) f32 {
 ///
 /// Returns the entity to spawn at
 pub fn SelectSpawnPoint() callconv(.c) Entity {
-    const classname = q.fieldRef(.classname);
     var numspots: f32 = 0;
     var totalspots: f32 = 0;
 
     // testinfo_player_start is only found in regioned levels
-    var spot = q.find(q.world.get(), classname, S("testplayerstart"));
+    var spot = q.find(q.world.get(), .classname, S("testplayerstart"));
     if (!spot.isNull())
         return spot;
 
@@ -296,7 +293,7 @@ pub fn SelectSpawnPoint() callconv(.c) Entity {
     // ok, find all spots that don't have players nearby
 
     var spots = q.world.get();
-    spot = q.find(q.world.get(), classname, S("info_player_deathmatch"));
+    spot = q.find(q.world.get(), .classname, S("info_player_deathmatch"));
     while (!spot.isNull()) {
         totalspots = totalspots + 1;
 
@@ -314,17 +311,17 @@ pub fn SelectSpawnPoint() callconv(.c) Entity {
         }
 
         // Get the next spot in the chain
-        spot = q.find(spot, classname, S("info_player_deathmatch"));
+        spot = q.find(spot, .classname, S("info_player_deathmatch"));
     }
     totalspots = totalspots - 1;
     if (numspots == 0) {
         // ack, they are all full, just pick one at random
         //      bprint (PRINT_HIGH, "Ackk! All spots are full. Selecting random spawn spot\n");
         totalspots = q.rint(q.random() * totalspots);
-        spot = q.find(q.world.get(), classname, S("info_player_deathmatch"));
+        spot = q.find(q.world.get(), .classname, S("info_player_deathmatch"));
         while (totalspots > 0) {
             totalspots = totalspots - 1;
-            spot = q.find(spot, classname, S("info_player_deathmatch"));
+            spot = q.find(spot, .classname, S("info_player_deathmatch"));
         }
         return spot;
     }
@@ -362,7 +359,7 @@ pub export fn PutClientInServer() void {
     const self = q.me();
 
     self.set(.classname, S("player"));
-    self.set(.health, 100);
+    self.set(.health, 10);
     self.set(.takedamage, q.DAMAGE_AIM);
     self.set(.solid, q.SOLID_SLIDEBOX);
     self.set(.movetype, q.MOVETYPE_WALK);
@@ -526,7 +523,7 @@ pub fn NextLevel() callconv(.c) void {
         o.set(q.map, q.mapname.get());
     } else {
         // find a trigger changelevel
-        o = q.find(q.world.get(), q.fieldRef(.classname), S("trigger_changelevel"));
+        o = q.find(q.world.get(), .classname, S("trigger_changelevel"));
         if (o.isNull() or q.mapname.get().eql(S("start"))) { // go back to same map if no trigger_changelevel
             o = q.spawn();
             o.set(q.map, q.mapname.get());

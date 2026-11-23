@@ -215,7 +215,7 @@ pub fn SUB_UseTargets() callconv(.c) void {
     if (!self.get(q.killtarget).isNull()) {
         var t = q.world.get();
         while (true) {
-            t = q.find(t, q.fieldRef(.targetname), self.get(q.killtarget));
+            t = q.find(t, .targetname, self.get(q.killtarget));
             if (t.isNull())
                 return;
             q.remove(t);
@@ -229,7 +229,7 @@ pub fn SUB_UseTargets() callconv(.c) void {
         const act = q.activator.get();
         var t = q.world.get();
         while (true) {
-            t = q.find(t, q.fieldRef(.targetname), self.get(.target));
+            t = q.find(t, .targetname, self.get(.target));
             if (t.isNull()) {
                 return;
             }

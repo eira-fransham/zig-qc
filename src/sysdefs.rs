@@ -547,6 +547,26 @@ impl SysDefs {
         None
     }
 
+    /// The system field (or vector field component) at slot `slot` of an
+    /// entity, and its type: a component (e.g. `origin_y`) is a float.
+    pub fn field_cell(&self, slot: u32) -> Option<(String, QcType)> {
+        let mut start = 0;
+        for &(fty, name) in self.fields {
+            let fty = field_type(fty);
+            let len = if fty == QcType::Vector { 3 } else { 1 };
+            if (start..start + len).contains(&slot) {
+                return Some(if fty == QcType::Vector {
+                    let c = ["x", "y", "z"][(slot - start) as usize];
+                    (format!("{name}_{c}"), QcType::Float)
+                } else {
+                    (name.to_string(), fty)
+                });
+            }
+            start += len;
+        }
+        None
+    }
+
     /// Map from slot index to addressable global.
     pub fn global_map(&self) -> GlobalMap {
         let mut slots = vec![None; SYS_GLOBALS_START as usize];

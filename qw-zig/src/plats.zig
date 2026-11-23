@@ -250,7 +250,7 @@ pub fn train_wait() callconv(.c) void {
 pub fn train_next() callconv(.c) void {
     const self = q.me();
 
-    const targ = q.find(q.world.get(), q.fieldRef(.targetname), self.get(.target));
+    const targ = q.find(q.world.get(), .targetname, self.get(.target));
     self.set(.target, targ.get(.target));
     if (self.get(.target).isNull())
         q.objerror(S("train_next: no next target"));
@@ -266,7 +266,7 @@ pub fn train_next() callconv(.c) void {
 pub fn func_train_find() callconv(.c) void {
     const self = q.me();
 
-    const targ = q.find(q.world.get(), q.fieldRef(.targetname), self.get(.target));
+    const targ = q.find(q.world.get(), .targetname, self.get(.target));
     self.set(.target, targ.get(.target));
     q.setorigin(self, targ.get(.origin) - self.get(.mins));
     if (self.get(.targetname).isNull()) { // not triggered, so start immediately

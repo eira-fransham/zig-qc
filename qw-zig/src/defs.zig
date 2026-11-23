@@ -102,19 +102,101 @@ pub const Field = enum(u32) {
     }
 };
 
-/// A QuakeC `entity`. In wasm this is an opaque `i64` handle: the converter
-/// infers whether an `i64` is an entity, a string or a field reference from
-/// the intrinsics and builtins it is passed to. It is a scalar (not a struct)
-/// so that Zig always passes it by value, never through the shadow stack.
-pub const Entity = enum(u64) {
-    _,
-
-    const Self = @This();
+/// A QuakeC `entity`: a pointer to its system fields (`entvars_t`), so they
+/// can be used directly, e.g. `self.health -= 1` or `e.origin[2] += 8`.
+/// Each field is at byte offset `4 *` its `Field` offset (checked by a test
+/// below). Vector fields are `[3]f32`, which coerces to and from `Vector`:
+/// `const v: Vector = e.origin;`, `e.origin = v;`.
+///
+/// Entities are never real memory: the converter turns loads and stores
+/// through an `Entity` into QuakeC field accesses. Only use fields through
+/// the pointer, and don't keep pointers to fields (`&e.health`). User fields
+/// (see `userField`) aren't in the struct: use `get` and `set`, which also
+/// work for system fields.
+///
+/// `allowzero` because `world` is entity 0.
+pub const Entity = *allowzero extern struct {
+    modelindex: f32,
+    absmin: [3]f32,
+    absmax: [3]f32,
+    ltime: f32,
+    lastruntime: f32,
+    movetype: f32,
+    solid: f32,
+    origin: [3]f32,
+    oldorigin: [3]f32,
+    velocity: [3]f32,
+    angles: [3]f32,
+    avelocity: [3]f32,
+    classname: String,
+    model: String,
+    frame: f32,
+    skin: f32,
+    effects: f32,
+    mins: [3]f32,
+    maxs: [3]f32,
+    size: [3]f32,
+    touch: Function,
+    use: Function,
+    think: Function,
+    blocked: Function,
+    nextthink: f32,
+    groundentity: Entity,
+    health: f32,
+    frags: f32,
+    weapon: f32,
+    weaponmodel: String,
+    weaponframe: f32,
+    currentammo: f32,
+    ammo_shells: f32,
+    ammo_nails: f32,
+    ammo_rockets: f32,
+    ammo_cells: f32,
+    items: f32,
+    takedamage: f32,
+    chain: Entity,
+    deadflag: f32,
+    view_ofs: [3]f32,
+    button0: f32,
+    button1: f32,
+    button2: f32,
+    impulse: f32,
+    fixangle: f32,
+    v_angle: [3]f32,
+    netname: String,
+    enemy: Entity,
+    flags: f32,
+    colormap: f32,
+    team: f32,
+    max_health: f32,
+    teleport_time: f32,
+    armortype: f32,
+    armorvalue: f32,
+    waterlevel: f32,
+    watertype: f32,
+    ideal_yaw: f32,
+    yaw_speed: f32,
+    aiment: Entity,
+    goalentity: Entity,
+    spawnflags: f32,
+    target: String,
+    targetname: String,
+    dmg_take: f32,
+    dmg_save: f32,
+    dmg_inflictor: Entity,
+    owner: Entity,
+    movedir: [3]f32,
+    message: String,
+    sounds: f32,
+    noise: String,
+    noise1: String,
+    noise2: String,
+    noise3: String,
 
     // `inline` so that `field` reaches the intrinsic as a constant; the
     // converter needs it to be a compile-time constant. `field` is a `Field`
     // (e.g. `.health`) or a `UserField` (see `userField`).
-    pub inline fn get(this: Self, comptime field: anytype) FieldType(field) {
+    pub inline fn get(this: Entity, comptime field: anytype) FieldType(field) {
         const offset = fieldOffset(field);
         return switch (FieldType(field)) {
             f32 => __quakec_load_entity_field_float(this, offset),
@@ -126,7 +208,7 @@ pub const Entity = enum(u64) {
         };
     }
 
-    pub inline fn set(this: Self, comptime field: anytype, value: FieldType(field)) void {
+    pub inline fn set(this: Entity, comptime field: anytype, value: FieldType(field)) void {
         const offset = fieldOffset(field);
         switch (FieldType(field)) {
             f32 => __quakec_store_entity_field_float(this, offset, value),
@@ -139,22 +221,24 @@ pub const Entity = enum(u64) {
     }
 
     /// `a == b` (`EQ_E`).
-    pub inline fn eql(a: Self, b: Self) bool {
+    pub inline fn eql(a: Entity, b: Entity) bool {
         return __quakec_eq_entity(a, b);
     }
 
     /// `a != b` (`NE_E`).
-    pub inline fn neq(a: Self, b: Self) bool {
+    pub inline fn neq(a: Entity, b: Entity) bool {
         return __quakec_ne_entity(a, b);
     }
 
     /// `!e` (`NOT_ENT`): whether this is `world`/null.
-    pub inline fn isNull(this: Self) bool {
+    pub inline fn isNull(this: Entity) bool {
         return __quakec_not_entity(this);
     }
 };
-/// A QuakeC `string`, an opaque `i64` handle like `Entity`.
-pub const String = enum(u64) {
+
+/// A QuakeC `string`: an opaque handle, which the converter infers from the
+/// intrinsics, builtins and fields it is used with.
+pub const String = enum(u32) {
     _,
 
     const Self = @This();
@@ -202,15 +286,6 @@ comptime {
 /// A QuakeC `vector`. With simd128 enabled this is passed as a `v128`.
 pub const Vector = @Vector(3, f32);
 
-/// A QuakeC field reference of type `.T` (e.g. `EntityField(String)` is `.string`).
-pub fn EntityField(comptime T: type) type {
-    return enum(u64) {
-        _,
-
-        pub const Type = T;
-    };
-}
-
 /// A QuakeC function value (`void()`), as stored in globals and fields. In
 /// wasm this is a plain function pointer (a table index); the converter
 /// turns it back into a QuakeC function.
@@ -245,12 +320,6 @@ pub fn FieldType(comptime field: anytype) type {
 /// as the address of their name in static data.
 inline fn fieldOffset(comptime field: anytype) u32 {
     return if (comptime isSysField(@TypeOf(field))) @backingInt(@as(Field, field)) else @intFromPtr(field.name);
-}
-
-/// A reference to a `.string` field, as passed to `find`.
-pub inline fn fieldRef(comptime field: anytype) EntityField(String) {
-    if (FieldType(field) != String) @compileError("only `.string` field references are supported");
-    return __quakec_field_ref_string(fieldOffset(field));
 }
 
 /// A Zig function as a QuakeC function value, e.g.
@@ -308,7 +377,7 @@ extern fn __quakec_ne_vector(a: Vector, b: Vector) bool;
 extern fn __quakec_not_vector(v: Vector) bool;
 extern fn __quakec_dot_vector(a: Vector, b: Vector) f32;
 
-extern fn __quakec_field_ref_string(field: u32) EntityField(String);
+extern fn __quakec_field_ref_string(field: u32) Field;
 extern fn __quakec_eq_fn(a: Function, b: Function) bool;
 extern fn __quakec_ne_fn(a: Function, b: Function) bool;
 extern fn __quakec_not_fn(f: Function) bool;
@@ -488,6 +557,11 @@ pub const SetChangeParms = global(fn () callconv(.c) void, 89);
 
 // ---- builtins (QuakeWorld) ----
 
+pub fn find(start: Entity, comptime fld: Field, match: String) Entity {
+    if (fld.Type() != String) @compileError("only `.string` field references are supported");
+    return find_mod.find(start, __quakec_field_ref_string(@backingInt(fld)), match);
+}
+
 pub extern "builtin" fn makevectors(ang: Vector) void; // #1
 pub extern "builtin" fn setorigin(e: Entity, o: Vector) void; // #2
 pub extern "builtin" fn setmodel(e: Entity, m: String) void; // #3
@@ -504,7 +578,10 @@ pub extern "builtin" fn spawn() Entity; // #14
 pub extern "builtin" fn remove(e: Entity) void; // #15
 pub extern "builtin" fn traceline(v1: Vector, v2: Vector, nomonsters: f32, forent: Entity) void; // #16
 pub extern "builtin" fn checkclient() Entity; // #17
-pub extern "builtin" fn find(start: Entity, fld: EntityField(String), match: String) Entity; // #18
+// Not `pub` so we can write an adapter function, above.
+const find_mod = struct {
+    extern "builtin" fn find(start: Entity, fld: Field, match: String) Entity; // #18
+};
 pub extern "builtin" fn precache_sound(s: String) String; // #19
 pub extern "builtin" fn precache_model(s: String) String; // #20
 pub extern "builtin" fn stuffcmd(client: Entity, s: String) void; // #21
@@ -989,6 +1066,27 @@ pub inline fn setState(frame: f32, next: Function) void {
     e.set(.frame, frame);
     e.set(.nextthink, time.get() + 0.1);
     e.set(.think, next);
+}
+
+// The layout only holds on wasm32 (4-byte pointers): run with
+// `zig test src/defs.zig -target wasm32-wasi --test-cmd wasmtime --test-cmd-bin`.
+test "entity fields match Field" {
+    if (@sizeOf(usize) != 4) return error.SkipZigTest;
+    const Fields = @typeInfo(Entity).pointer.child;
+    const names = @typeInfo(Fields).@"struct".field_names;
+    const variants = @typeInfo(Field).@"enum";
+    try std.testing.expectEqual(variants.field_names.len, names.len);
+    inline for (variants.field_names, variants.field_values) |name, value| {
+        const field: Field = @fromBackingInt(@intCast(value));
+        const T = @FieldType(Fields, name);
+        try std.testing.expectEqual(@backingInt(field) * 4, @offsetOf(Fields, name));
+        if (field.Type() == Vector) {
+            try std.testing.expectEqual([3]f32, T);
+        } else {
+            try std.testing.expectEqual(field.Type(), T);
+            try std.testing.expectEqual(4, @sizeOf(T));
+        }
+    }
 }
 
 test "float bit operations" {

@@ -136,8 +136,8 @@ const Entity = defs.Entity;
 const armor = defs.userField(f32, "armor");
 const last_dir = defs.userGlobal(Vector, "last_dir");
 
-/// Damage absorbed by up to half by armor. Kills the entity (renaming it)
-/// at 0 health.
+/// Damage absorbed by up to half by armor (a user field, so through `get`
+/// and `set`). Kills the entity (renaming it) at 0 health.
 pub export fn take_damage(e: Entity, dmg: f32) Entity {
     var d = dmg;
     const a = e.get(armor);
@@ -146,21 +146,20 @@ pub export fn take_damage(e: Entity, dmg: f32) Entity {
         e.set(armor, a - absorbed);
         d -= absorbed;
     }
-    const h = e.get(.health) - d;
-    e.set(.health, h);
-    if (h <= 0) e.set(.classname, String.lit("corpse"));
+    e.health -= d;
+    if (e.health <= 0) e.classname = String.lit("corpse");
     return e;
 }
 
-/// A vector field.
+/// A vector field, read whole.
 pub export fn speed_sq(e: Entity) f32 {
-    const v = e.get(.velocity);
+    const v: Vector = e.velocity;
     return defs.dot(v, v);
 }
 
 /// A string field compared with a string argument.
 pub export fn is_named(e: Entity, n: String) f32 {
-    return if (e.get(.classname).eql(n)) 1 else 0;
+    return if (e.classname.eql(n)) 1 else 0;
 }
 
 /// Null entities and strings: 1 if `e` is null, plus 2 if `s` is.
@@ -176,19 +175,19 @@ pub export fn null_flags(e: Entity, s: String) f32 {
 pub export fn chain_health(e: Entity) f32 {
     var total: f32 = 0;
     var cur = e;
-    while (!cur.isNull()) : (cur = cur.get(.owner)) total += cur.get(.health);
+    while (!cur.isNull()) : (cur = cur.owner) total += cur.health;
     return total;
 }
 
 /// One function used at two QuakeC types: it is emitted once per type.
-noinline fn choose(c: bool, a: u64, b: u64) u64 {
+noinline fn choose(c: bool, a: u32, b: u32) u32 {
     return if (c) a else b;
 }
 
 /// The health of `a` or `b`.
 pub export fn pick_health(c: f32, a: Entity, b: Entity) f32 {
-    const e: Entity = @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
-    return e.get(.health);
+    const e: Entity = @ptrFromInt(choose(c != 0, @intFromPtr(a), @intFromPtr(b)));
+    return e.health;
 }
 
 /// Whether `a` or `b` is "axe".
@@ -197,14 +196,29 @@ pub export fn pick_is_axe(c: f32, a: String, b: String) f32 {
     return if (s.eql(String.lit("axe"))) 1 else 0;
 }
 
-/// LLVM merges these (they are the same in wasm): one function, exported
-/// under both names.
-pub export fn pick_entity(c: f32, a: Entity, b: Entity) Entity {
-    return @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
+/// The target example: a field of `self`, updated in place.
+pub export fn self_hurt() f32 {
+    const s = defs.self.get();
+    s.health -= 1;
+    return s.health;
 }
 
-pub export fn pick_string(c: f32, a: String, b: String) String {
-    return @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
+/// A vector field, written whole.
+pub export fn nudge(e: Entity, d: Vector) Entity {
+    e.origin = @as(Vector, e.origin) + d;
+    return e;
+}
+
+/// A component of a vector field.
+pub export fn lift(e: Entity) Entity {
+    e.origin[2] += 8;
+    return e;
+}
+
+/// System fields through `get` and `set`, which still work.
+pub export fn old_style(e: Entity) Entity {
+    e.set(.frags, e.get(.health) * 2);
+    return e;
 }
 
 /// A string literal chosen by a `switch`.
@@ -228,20 +242,19 @@ pub export fn midpoint(a: Vector, b: Vector) Vector {
 /// The `self` global: heals it, up to its `max_health`.
 pub export fn heal_self(by: f32) f32 {
     const s = defs.self.get();
-    const h = @min(s.get(.health) + by, s.get(.max_health));
-    s.set(.health, h);
-    return h;
+    s.health = @min(s.health + by, s.max_health);
+    return s.health;
 }
 
 fn add_frags(e: Entity, n: f32) callconv(.c) void {
-    e.set(.frags, e.get(.frags) + n);
+    e.frags += n;
 }
 
 /// A function stored in an entity field, then called through it with
 /// arguments.
 pub export fn call_through_field(e: Entity) Entity {
-    e.set(.think, defs.func(add_frags));
-    const f = defs.callAs(fn (Entity, f32) callconv(.c) void, e.get(.think));
+    e.think = defs.func(add_frags);
+    const f = defs.callAs(fn (Entity, f32) callconv(.c) void, e.think);
     f(e, 1);
     f(e, 2);
     return e;
