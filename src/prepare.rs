@@ -7,6 +7,9 @@
 //!   requires to be constants) and global initializers.
 //! - `return_call` becomes `call` then `return`: QuakeC has no tail calls,
 //!   and `waffle` doesn't support them.
+//! - A function exported under several names (LLVM merges identical
+//!   functions) gets a wrapper for each name after the first, so that each
+//!   becomes a QuakeC function (with its own types).
 
 use anyhow::{Context as _, Result};
 use walrus::ir::{self, Instr, InstrSeqId, Value};
@@ -77,6 +80,8 @@ pub fn prepare(wasm: &[u8]) -> Result<Prepared> {
         }
     }
 
+    export_wrappers(&mut module);
+
     // The order walrus emits functions in: imports, then local functions by
     // decreasing size (see `used_local_functions` in walrus).
     let mut imports = Vec::new();
@@ -98,6 +103,36 @@ pub fn prepare(wasm: &[u8]) -> Result<Prepared> {
         wasm: module.emit_wasm(),
         original_index,
     })
+}
+
+/// Re-export each function exported more than once through a wrapper for
+/// each name after its first.
+fn export_wrappers(module: &mut Module) {
+    let mut seen = std::collections::HashSet::new();
+    let exports: Vec<_> = module
+        .exports
+        .iter()
+        .filter_map(|e| match e.item {
+            walrus::ExportItem::Function(f) => Some((e.id(), f)),
+            _ => None,
+        })
+        .collect();
+    for (export, f) in exports {
+        if seen.insert(f) {
+            continue;
+        }
+        let ty = module.types.get(module.funcs.get(f).ty()).clone();
+        let mut builder =
+            walrus::FunctionBuilder::new(&mut module.types, ty.params(), ty.results());
+        let params: Vec<_> = ty.params().iter().map(|&t| module.locals.add(t)).collect();
+        let mut body = builder.func_body();
+        for &p in &params {
+            body.local_get(p);
+        }
+        body.call(f);
+        let wrapper = builder.finish(params, &mut module.funcs);
+        module.exports.get_mut(export).item = walrus::ExportItem::Function(wrapper);
+    }
 }
 
 /// Rewrite one instruction sequence, returning the sequences nested in it.
@@ -239,7 +274,8 @@ pub fn merge_blocks(body: &mut waffle::FunctionBody) {
     loop {
         let mut refs: std::collections::HashMap<waffle::Block, usize> = Default::default();
         for (_, def) in body.blocks.entries() {
-            def.terminator.visit_targets(|t| *refs.entry(t.block).or_default() += 1);
+            def.terminator
+                .visit_targets(|t| *refs.entry(t.block).or_default() += 1);
         }
         let mut changed = false;
         let blocks: Vec<_> = body.blocks.iter().collect();
@@ -342,5 +378,105 @@ pub fn bool_offsets_to_select(body: &mut waffle::FunctionBody) {
         let lo = konst(body, k);
         let args = body.arg_pool.from_iter([hi, lo, cond].into_iter());
         body.values[v] = ValueDef::Operator(O::Select, args, tys);
+    }
+}
+
+/// Rewrite sign tests of floats' bits, which Zig's `@min`/`@max` use for
+/// signed zeros: `reinterpret(x) < 0` becomes `x < 0` (and `>= 0` likewise),
+/// and `(reinterpret(a) ^ reinterpret(b)) < 0` (whether the signs differ)
+/// becomes `(a < 0) != (b < 0)`. QuakeC can't see a float's bits; the only
+/// difference is that -0.0 counts as positive. Bit reinterpretations left
+/// unused are removed.
+pub fn float_sign_tests(body: &mut waffle::FunctionBody) {
+    use waffle::{Operator as O, Type, Value, ValueDef};
+    let op_of = |body: &waffle::FunctionBody, v: Value| match &body.values[body.resolve_alias(v)] {
+        ValueDef::Operator(op, args, _) => Some((*op, body.arg_pool[*args].to_vec())),
+        _ => None,
+    };
+    let reinterpreted = |body: &waffle::FunctionBody, v: Value| match op_of(body, v) {
+        Some((O::I32ReinterpretF32, a)) => Some(a[0]),
+        _ => None,
+    };
+    let blocks: Vec<_> = body.blocks.iter().collect();
+    let mut changed = false;
+    for b in blocks {
+        let mut i = 0;
+        while i < body.blocks[b].insts.len() {
+            let v = body.blocks[b].insts[i];
+            i += 1;
+            let Some((op @ (O::I32LtS | O::I32GeS), a)) = op_of(body, v) else {
+                continue;
+            };
+            if crate::infer::const_val(body, a[1]) != Some(0) {
+                continue;
+            }
+            let i32_ty = body.single_type_list(Type::I32);
+            let f32_ty = body.single_type_list(Type::F32);
+            let zero = body.add_value(ValueDef::Operator(
+                O::F32Const { value: 0 },
+                Default::default(),
+                f32_ty,
+            ));
+            let cmp = if op == O::I32LtS { O::F32Lt } else { O::F32Ge };
+            let new = if let Some(x) = reinterpreted(body, a[0]) {
+                (cmp, vec![x, zero])
+            } else if let Some((O::I32Xor, xs)) = op_of(body, a[0])
+                && let (Some(x), Some(y)) = (reinterpreted(body, xs[0]), reinterpreted(body, xs[1]))
+            {
+                // Insert `x < 0` and `y < 0` before `v`.
+                let mut sign = |body: &mut waffle::FunctionBody, f: Value| {
+                    let args = body.arg_pool.from_iter([f, zero].into_iter());
+                    let s = body.add_value(ValueDef::Operator(O::F32Lt, args, i32_ty));
+                    body.blocks[b].insts.insert(i - 1, s);
+                    i += 1;
+                    s
+                };
+                let (sx, sy) = (sign(body, x), sign(body, y));
+                let ne = if op == O::I32LtS { O::I32Ne } else { O::I32Eq };
+                (ne, vec![sx, sy])
+            } else {
+                continue;
+            };
+            let args = body.arg_pool.from_iter(new.1.into_iter());
+            body.values[v] = ValueDef::Operator(new.0, args, i32_ty);
+            // The constant is declared by being in a block (its position
+            // doesn't matter).
+            body.blocks[b].insts.insert(i - 1, zero);
+            i += 1;
+            changed = true;
+        }
+    }
+    if !changed {
+        return;
+    }
+    // Remove the reinterpretations (and xors of them) now unused.
+    loop {
+        let mut uses: std::collections::HashMap<Value, usize> = Default::default();
+        for (_, def) in body.blocks.entries() {
+            for &v in &def.insts {
+                if let ValueDef::Operator(_, args, _) = &body.values[v] {
+                    for &a in &body.arg_pool[*args] {
+                        *uses.entry(body.resolve_alias(a)).or_default() += 1;
+                    }
+                }
+            }
+            def.terminator
+                .visit_uses(|a| *uses.entry(body.resolve_alias(a)).or_default() += 1);
+        }
+        let mut removed = false;
+        for (_, def) in body.blocks.entries_mut() {
+            def.insts.retain(|&v| {
+                let dead = !uses.contains_key(&v)
+                    && matches!(
+                        body.values[v],
+                        ValueDef::Operator(O::I32ReinterpretF32 | O::I32Xor, _, _)
+                    );
+                removed |= dead;
+                !dead
+            });
+        }
+        if !removed {
+            break;
+        }
     }
 }

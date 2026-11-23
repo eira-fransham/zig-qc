@@ -9,11 +9,11 @@ use anyhow::{Context as _, Result, bail, ensure};
 use waffle::entity::EntityRef;
 use waffle::{ExportKind, Func, FuncDecl, Global, ImportKind, Module, Type};
 
-use crate::data::{DATA_BASE, DataKind, StaticData};
+use crate::data::{self, DATA_BASE, DataKind, StaticData};
 use crate::emit;
 use crate::infer::{Infer, Kind};
 use crate::prepare::prepare;
-use crate::qc::{QcType, Sig, Ty, TypeVars};
+use crate::qc::{Expr, QcType, Sig, Ty, TypeVars};
 use crate::sysdefs::{self, GlobalMap, SysDefs};
 
 /// Import module for numbered builtins. Vanilla NetQuake builtins are
@@ -138,6 +138,9 @@ pub struct Ctx<'m> {
     pub data: StaticData,
     /// Accessor functions needed for dynamic loads from static data.
     pub data_accessors: BTreeSet<DataKind>,
+    /// Accessors needed for dynamic loads of pointers (string literals or
+    /// functions) from static data, by the type loaded.
+    pub pointer_accessors: BTreeSet<QcType>,
     /// The imported `__stack_pointer` global, if any. Using it is an error;
     /// importing it without using it is fine.
     pub stack_pointer: Option<Global>,
@@ -226,6 +229,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         if let Some(body) = f.body_mut() {
             crate::prepare::simplify_params(body);
             crate::prepare::merge_blocks(body);
+            crate::prepare::float_sign_tests(body);
             crate::prepare::bool_offsets_to_select(body);
         }
     }
@@ -242,6 +246,15 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         }
     }
     let mut data = StaticData::from_segments(&segments)?;
+    // Position-independent modules store the absolute addresses of pointers
+    // in static data at load time. Do it now.
+    let relocs = module.exports.iter().find_map(|e| match e.kind {
+        ExportKind::Func(f) if e.name == "__wasm_apply_data_relocs" => Some(f),
+        _ => None,
+    });
+    if let Some(f) = relocs {
+        apply_relocs(&module, f, &mut data).context("in `__wasm_apply_data_relocs`")?;
+    }
     let defs = target(&module, &mut data)?;
 
     let mut ctx = Ctx {
@@ -253,6 +266,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         warnings: Vec::new(),
         data,
         data_accessors: BTreeSet::new(),
+        pointer_accessors: BTreeSet::new(),
         stack_pointer: None,
         table_funcs: HashMap::new(),
         user_globals: BTreeMap::new(),
@@ -357,7 +371,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     let mut roots: Vec<Func> = export_names.keys().copied().collect();
     roots.extend(ctx.table_funcs.values().copied());
     roots.extend(module.start_func);
-    roots.retain(|f| ctx.funcs[f].kind == FuncKind::Local);
+    roots.retain(|f| ctx.funcs[f].kind == FuncKind::Local && Some(*f) != relocs);
     roots.sort();
     roots.dedup();
     let instances = inf.instances(&ctx, &roots)?;
@@ -371,16 +385,25 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             inst.name,
             ps.len()
         );
-        ensure!(rs.len() <= 1, "multi-value returns are not supported (in `{}`)", inst.name);
+        ensure!(
+            rs.len() <= 1,
+            "multi-value returns are not supported (in `{}`)",
+            inst.name
+        );
         sigs.insert(inst.name.clone(), sig_of(&ps, &rs));
     }
     for (f, info) in &ctx.funcs {
         if let FuncKind::Builtin(_) | FuncKind::UnnamedBuiltin = info.kind {
-            let (ps, rs) = match ctx.defs.builtin(&info.name).filter(|_| {
-                matches!(info.kind, FuncKind::Builtin(Some(_)))
-            }) {
+            let (ps, rs) = match ctx
+                .defs
+                .builtin(&info.name)
+                .filter(|_| matches!(info.kind, FuncKind::Builtin(Some(_))))
+            {
                 Some(b) => (
-                    b.params.iter().map(|&t| Kind::from_qc(t).unwrap()).collect(),
+                    b.params
+                        .iter()
+                        .map(|&t| Kind::from_qc(t).unwrap())
+                        .collect(),
                     Kind::from_qc(b.ret).into_iter().collect(),
                 ),
                 None => inf.import(*f).unwrap_or_default(),
@@ -468,8 +491,45 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         out.push('\n');
     }
 
-    if !ctx.data_accessors.is_empty() {
+    let mut pointer_accessors = Vec::new();
+    for &ty in &ctx.pointer_accessors {
+        let mut entries = Vec::new();
+        for (addr, value) in ctx.data.pointers() {
+            let e = match ty {
+                QcType::String => match ctx.data.c_string(value as u64) {
+                    Some(bytes) => Expr::Str(bytes),
+                    None => continue,
+                },
+                _ => match ctx.table_funcs.get(&(value as u64)) {
+                    Some(f) => {
+                        // Function values are `void()` (see `emit`).
+                        let name = ctx.funcs[f].name.clone();
+                        let void = sigs.get(&name) == Some(&Sig::void());
+                        let f = Expr::FuncName(name);
+                        if void {
+                            f
+                        } else {
+                            Expr::FnCast(Sig::void(), Box::new(f))
+                        }
+                    }
+                    None => continue,
+                },
+            };
+            entries.push((addr as f32, e));
+        }
+        pointer_accessors.push(data::lookup(
+            &pointer_accessor_name(ty),
+            ty,
+            &entries,
+            Expr::Null,
+        ));
+    }
+    if !ctx.data_accessors.is_empty() || !pointer_accessors.is_empty() {
         out.push_str("// ---- static data accessors ----\n");
+        for f in &pointer_accessors {
+            f.render(&mut tv, &mut out);
+            out.push('\n');
+        }
         for &kind in &ctx.data_accessors {
             ctx.data.accessor(kind).render(&mut tv, &mut out);
             out.push('\n');
@@ -616,6 +676,43 @@ fn check_builtin_sig(b: &sysdefs::Builtin, params: &[Type], rets: &[Type]) -> Re
             q.name(),
             rets.len()
         ),
+    }
+    Ok(())
+}
+
+/// The accessor for dynamic loads of pointers of type `ty` (see
+/// [`Ctx::pointer_accessors`]).
+pub fn pointer_accessor_name(ty: QcType) -> String {
+    match ty {
+        QcType::String => "__wasm_data_string".into(),
+        _ => "__wasm_data_fn".into(),
+    }
+}
+
+/// Run `__wasm_apply_data_relocs` (function `f`): constant stores of
+/// pointers into static data.
+fn apply_relocs(module: &Module, f: Func, data: &mut StaticData) -> Result<()> {
+    let body = module.funcs[f].body().expect("local function");
+    for (_, block) in body.blocks.entries() {
+        for &v in &block.insts {
+            if crate::infer::const_val(body, v).is_some() {
+                continue;
+            }
+            let waffle::ValueDef::Operator(op, args, _) = &body.values[v] else {
+                continue;
+            };
+            let waffle::Operator::I32Store { memory } = op else {
+                bail!("unsupported relocation `{op:?}`");
+            };
+            let a = &body.arg_pool[*args];
+            let (Some(addr), Some(value)) = (
+                crate::infer::const_val(body, a[0]),
+                crate::infer::const_val(body, a[1]),
+            ) else {
+                bail!("relocation with a non-constant address or value");
+            };
+            data.relocate((addr + memory.offset as i64) as u64, value as u32)?;
+        }
     }
     Ok(())
 }

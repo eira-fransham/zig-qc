@@ -51,6 +51,8 @@ struct Emitter<'a, 'm> {
     /// Variable shifts that are only used by a bit test (see `bit_test`),
     /// emitted as part of it.
     bit_tests: HashSet<Value>,
+    /// Block parameters known to be non-negative (see [`nonneg`]).
+    nonneg: HashSet<Value>,
 }
 
 /// An edge copy: destination, plain source local, locals read.
@@ -96,6 +98,7 @@ pub fn emit(
         rec: HashMap::new(),
         in_term: false,
         bit_tests: HashSet::new(),
+        nonneg: HashSet::new(),
     };
     let f = e.function()?;
     Ok(((inst.func, i), f))
@@ -180,6 +183,7 @@ impl Emitter<'_, '_> {
                 }
             }
         }
+        self.nonneg = nonneg_params(body);
     }
 
     fn count_value_uses(&mut self) {
@@ -1038,6 +1042,37 @@ impl Emitter<'_, '_> {
                 };
                 self.define(v, e)?;
             }
+            // Unsigned comparisons. Integers are floats, so a value that
+            // wrapped below 0 (like `x - 1` in a `switch`'s range check) is
+            // negative, but compares as at least 2^31.
+            O::I32LtU | O::I32GtU | O::I32LeU | O::I32GeU => {
+                let a = args(body, v);
+                let (na, nb) = (
+                    nonneg(body, &self.nonneg, a[0]),
+                    nonneg(body, &self.nonneg, a[1]),
+                );
+                let [x, y]: [Expr; 2] = self.operands(v)?.try_into().unwrap();
+                // `x op x - c` (LLVM's `umax`/`usub.sat` idiom): `x - c`
+                // wraps exactly when `x <u c`, so this is `x >=u c` or
+                // `x <u c`.
+                let minus = |a: Value, b: Value| {
+                    let c = -sub_const(body, b, a)?;
+                    (c > 0 && c < 1 << 24).then_some(c as f32)
+                };
+                let e = if let Some(c) = minus(a[0], a[1]) {
+                    let ge = matches!(op, O::I32GtU | O::I32GeU);
+                    let op = if ge { O::I32GeU } else { O::I32LtU };
+                    self.unsigned_cmp(&op, x, Expr::Float(c), na, true)
+                } else if let Some(c) = minus(a[1], a[0]) {
+                    // `x - c op x`: the same, flipped.
+                    let lt = matches!(op, O::I32LtU | O::I32LeU);
+                    let op = if lt { O::I32GeU } else { O::I32LtU };
+                    self.unsigned_cmp(&op, y, Expr::Float(c), nb, true)
+                } else {
+                    self.unsigned_cmp(op, x, y, na, nb)
+                };
+                self.define(v, e)?;
+            }
             op => {
                 let [a, b]: [Expr; 2] = match self.operands(v)?.try_into() {
                     Ok(ops) => ops,
@@ -1048,6 +1083,60 @@ impl Emitter<'_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// `x op y` for an unsigned comparison `op`, where `nx` and `ny` say
+    /// whether each operand is known to be non-negative.
+    fn unsigned_cmp(&mut self, op: &Operator, x: Expr, y: Expr, nx: bool, ny: bool) -> Expr {
+        use Operator as O;
+        let signed = match op {
+            O::I32LtU => BinOp::Lt,
+            O::I32GtU => BinOp::Gt,
+            O::I32LeU => BinOp::Le,
+            _ => BinOp::Ge,
+        };
+        let bin = |op, a: Expr, b: Expr| Expr::Bin(op, Box::new(a), Box::new(b));
+        if let (Expr::Float(a), Expr::Float(b)) = (&x, &y) {
+            let (a, b) = (*a as i64 as u32, *b as i64 as u32);
+            let r = match signed {
+                BinOp::Lt => a < b,
+                BinOp::Gt => a > b,
+                BinOp::Le => a <= b,
+                _ => a >= b,
+            };
+            return Expr::Float(r as u32 as f32);
+        }
+        if nx && ny {
+            return fold(signed, x, y);
+        }
+        // A negative operand compares as greater than any non-negative one.
+        let greater = matches!(signed, BinOp::Gt | BinOp::Ge);
+        let neg = |e: Expr| bin(BinOp::Lt, e, Expr::Float(0.0));
+        let pos = |e: Expr| bin(BinOp::Ge, e, Expr::Float(0.0));
+        if ny {
+            // `x <u y` is `x >= 0 && x < y`; `x >u y` is `x < 0 || x > y`.
+            let x = self.simple(x, QcType::Float);
+            let cmp = bin(signed, x.clone(), y);
+            return if greater {
+                bin(BinOp::BitOr, neg(x), cmp)
+            } else {
+                bin(BinOp::BitAnd, pos(x), cmp)
+            };
+        }
+        let y = self.simple(y, QcType::Float);
+        if nx {
+            // `x <u y` is `y < 0 || x < y`; `x >u y` is `y >= 0 && x > y`.
+            let cmp = bin(signed, x, y.clone());
+            return if greater {
+                bin(BinOp::BitAnd, pos(y), cmp)
+            } else {
+                bin(BinOp::BitOr, neg(y), cmp)
+            };
+        }
+        // The signed comparison, flipped if the signs differ.
+        let x = self.simple(x, QcType::Float);
+        let cmp = bin(signed, x.clone(), y.clone());
+        bin(BinOp::Ne, cmp, bin(BinOp::Ne, neg(x), neg(y)))
     }
 
     fn sig_of_type(&mut self, sig: waffle::Signature, v: Value) -> Result<Sig> {
@@ -1076,6 +1165,33 @@ impl Emitter<'_, '_> {
     fn load(&mut self, v: Value, op: &Operator) -> Result<()> {
         let (dk, offset) = DataKind::from_load(op).expect("a load");
         let [addr]: [Expr; 1] = self.operands(v)?.try_into().unwrap();
+        let used = self.uses.get(&v).is_some_and(|&(n, _)| n > 0);
+        // A pointer stored in static data.
+        let (k, bias) = if used {
+            self.inf.value(self.inst, v)?
+        } else {
+            (Kind::Float, 0)
+        };
+        if k != Kind::Float {
+            ensure!(
+                matches!(k, Kind::String | Kind::Func) && dk == DataKind::I32 && bias == 0,
+                "unsupported load of a {k} from static data"
+            );
+            let addr = fold(BinOp::Add, addr, Expr::Float(offset as f32));
+            if let Expr::Float(a) = addr {
+                let x = self
+                    .ctx
+                    .data
+                    .read_u32(a as u64)
+                    .ok_or_else(|| anyhow!("load from address {a}, outside of static data"))?;
+                let e = self.constant(x as i64, k, 0, Type::I32)?;
+                return self.define(v, e);
+            }
+            self.ctx.pointer_accessors.insert(k.qc());
+            let name = crate::translate::pointer_accessor_name(k.qc());
+            let call = Expr::Call(Box::new(Expr::FuncName(name)), vec![addr]);
+            return self.assign(v, call);
+        }
         if let Expr::Float(a) = addr {
             let a = a as i64 + offset as i64;
             if !StaticData::is_data_addr(a as u64) {
@@ -1622,6 +1738,104 @@ fn bit_test(body: &FunctionBody, v: Value) -> Option<(Value, Value, u32, bool)> 
         Operator::I32Shl if c == 1 => Some((s, sa[1], k as u32, true)),
         Operator::I32ShrU if k == 1 => Some((s, sa[1], c, false)),
         _ => None,
+    }
+}
+
+/// Whether the `i32` `v` is known to be non-negative (as a signed integer),
+/// given the block parameters `params` that are. Like the rest of the
+/// converter, this assumes adding and multiplying don't wrap.
+fn nonneg(body: &FunctionBody, params: &HashSet<Value>, v: Value) -> bool {
+    use Operator as O;
+    let v = body.resolve_alias(v);
+    if let Some(c) = const_val(body, v) {
+        return c as i32 >= 0;
+    }
+    let op = match &body.values[v] {
+        ValueDef::BlockParam(..) => return params.contains(&v),
+        ValueDef::Operator(op, _, _) => op,
+        _ => return false,
+    };
+    let all = || args(body, v).iter().all(|&a| nonneg(body, params, a));
+    match op {
+        O::I32TruncF32U
+        | O::I32TruncSatF32U
+        | O::I32Load8U { .. }
+        | O::I32Load16U { .. }
+        | O::I32Eqz
+        | O::I32Eq
+        | O::I32Ne
+        | O::I32LtS
+        | O::I32LtU
+        | O::I32GtS
+        | O::I32GtU
+        | O::I32LeS
+        | O::I32LeU
+        | O::I32GeS
+        | O::I32GeU
+        | O::F32Eq
+        | O::F32Ne
+        | O::F32Lt
+        | O::F32Gt
+        | O::F32Le
+        | O::F32Ge => true,
+        O::I32And => args(body, v).iter().any(|&a| nonneg(body, params, a)),
+        O::I32ShrU => const_val(body, args(body, v)[1]).is_some_and(|k| k % 32 != 0),
+        O::I32Add | O::I32Mul | O::I32Or | O::I32DivU | O::I32RemU => all(),
+        // The condition doesn't matter.
+        O::Select => args(body, v)[..2].iter().all(|&a| nonneg(body, params, a)),
+        _ => false,
+    }
+}
+
+/// `d` if `y` is `x + d` for a constant `d`.
+fn sub_const(body: &FunctionBody, y: Value, x: Value) -> Option<i64> {
+    let (x, y) = (body.resolve_alias(x), body.resolve_alias(y));
+    let ValueDef::Operator(op, _, _) = &body.values[y] else {
+        return None;
+    };
+    let a = args(body, y);
+    let same = |v: Value| body.resolve_alias(v) == x;
+    let k = |v: Value| const_val(body, v).map(|k| k as i32 as i64);
+    match op {
+        Operator::I32Add if same(a[0]) => k(a[1]),
+        Operator::I32Add if same(a[1]) => k(a[0]),
+        Operator::I32Sub if same(a[0]) => k(a[1]).map(|k| -k),
+        _ => None,
+    }
+}
+
+/// The block parameters that are non-negative: those (other than the
+/// function's parameters) whose every incoming value is. Found
+/// optimistically, so a loop counter that starts at 0 and counts up is.
+fn nonneg_params(body: &FunctionBody) -> HashSet<Value> {
+    let mut edges: Vec<(Value, Value)> = Vec::new();
+    for (_, def) in body.blocks.entries() {
+        def.terminator.visit_targets(|t| {
+            for (&a, &(_, p)) in t.args.iter().zip(&body.blocks[t.block].params) {
+                edges.push((p, a));
+            }
+        });
+    }
+    let mut set: HashSet<Value> = body
+        .blocks
+        .entries()
+        .filter(|&(b, _)| b != body.entry)
+        .flat_map(|(_, def)| &def.params)
+        .filter(|&&(ty, _)| ty == Type::I32)
+        .map(|&(_, p)| p)
+        .collect();
+    loop {
+        let bad: Vec<Value> = edges
+            .iter()
+            .filter(|&&(p, a)| set.contains(&p) && !nonneg(body, &set, a))
+            .map(|&(p, _)| p)
+            .collect();
+        if bad.is_empty() {
+            return set;
+        }
+        for p in bad {
+            set.remove(&p);
+        }
     }
 }
 

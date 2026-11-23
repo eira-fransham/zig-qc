@@ -7,6 +7,7 @@
 //! tables LLVM makes from `switch`es) call a generated accessor function that
 //! binary-searches the data.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use anyhow::{Result, bail};
@@ -82,6 +83,9 @@ pub struct StaticData {
     /// Absolute address ranges read as string literals. Accessors leave these
     /// out: string bytes are only read whole, by `__quakec_string_literal`.
     strings: Vec<Range<u64>>,
+    /// Addresses of `i32` pointers (to static data or functions), written by
+    /// `__wasm_apply_data_relocs` (see [`StaticData::relocate`]).
+    pointers: BTreeSet<u64>,
 }
 
 impl StaticData {
@@ -106,7 +110,38 @@ impl StaticData {
         Ok(Self {
             bytes,
             strings: Vec::new(),
+            pointers: BTreeSet::new(),
         })
+    }
+
+    /// Store pointer `value` at `addr`, as the module's relocation function
+    /// would when it is loaded.
+    pub fn relocate(&mut self, addr: u64, value: u32) -> Result<()> {
+        let Some(start) = addr
+            .checked_sub(DATA_BASE)
+            .map(|o| o as usize)
+            .filter(|&o| o + 4 <= self.bytes.len())
+        else {
+            bail!("data relocation at address {addr}, outside of static data");
+        };
+        self.bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
+        self.pointers.insert(addr);
+        Ok(())
+    }
+
+    /// The pointers in static data: `(address, value)`.
+    pub fn pointers(&self) -> Vec<(u64, u32)> {
+        self.pointers
+            .iter()
+            .map(|&a| (a, self.read_u32(a).expect("pointer in static data")))
+            .collect()
+    }
+
+    /// Read an `i32` at an absolute address.
+    pub fn read_u32(&self, addr: u64) -> Option<u32> {
+        let start = usize::try_from(addr.checked_sub(DATA_BASE)?).ok()?;
+        let b = self.bytes.get(start..start + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     /// Whether `addr` falls in the static data region (or past it, which is
@@ -153,39 +188,49 @@ impl StaticData {
                 .iter()
                 .any(|r| a < r.end && r.start < a + kind.size())
         };
-        let entries: Vec<(f32, f32)> = (0..self.bytes.len() as u64 / kind.size())
+        let entries: Vec<(f32, Expr)> = (0..self.bytes.len() as u64 / kind.size())
             .map(|i| DATA_BASE + i * kind.size())
             .filter(|&a| !in_string(a))
-            .map(|a| (a as f32, self.read(a, kind).unwrap()))
+            .map(|a| (a as f32, Expr::Float(self.read(a, kind).unwrap())))
+            .filter(|(_, v)| *v != Expr::Float(0.0))
             .collect();
-        let mut body = search(&entries);
-        body.push(Stmt::Return(Some(Expr::Float(0.0))));
-        Function {
-            name: kind.accessor_name().to_string(),
-            params: vec![("addr".into(), Ty::Known(QcType::Float))],
-            ret: Ty::Known(QcType::Float),
-            locals: vec![],
-            body,
-        }
+        lookup(
+            kind.accessor_name(),
+            QcType::Float,
+            &entries,
+            Expr::Float(0.0),
+        )
+    }
+}
+
+/// `ret name(float addr)`: the value for `addr` in `entries` (sorted by
+/// address), or `default`.
+pub fn lookup(name: &str, ret: QcType, entries: &[(f32, Expr)], default: Expr) -> Function {
+    let mut body = search(entries);
+    body.push(Stmt::Return(Some(default)));
+    Function {
+        name: name.to_string(),
+        params: vec![("addr".into(), Ty::Known(QcType::Float))],
+        ret: Ty::Known(ret),
+        locals: vec![],
+        body,
     }
 }
 
 /// Binary search over `(address, value)` pairs, sorted by address. Falls
-/// through (to the caller's `return 0`) if no address matches. Zero values are
-/// skipped since they are the default.
-fn search(entries: &[(f32, f32)]) -> Vec<Stmt> {
+/// through (to the caller's default) if no address matches.
+fn search(entries: &[(f32, Expr)]) -> Vec<Stmt> {
     let addr = || Box::new(Expr::Local("addr".into()));
     if entries.len() <= 4 {
         return entries
             .iter()
-            .filter(|(_, v)| *v != 0.0)
-            .map(|&(a, v)| {
-                let cond = Expr::Bin(BinOp::Eq, addr(), Box::new(Expr::Float(a)));
-                Stmt::If(cond, vec![Stmt::Return(Some(Expr::Float(v)))], vec![])
+            .map(|(a, v)| {
+                let cond = Expr::Bin(BinOp::Eq, addr(), Box::new(Expr::Float(*a)));
+                Stmt::If(cond, vec![Stmt::Return(Some(v.clone()))], vec![])
             })
             .collect();
     }
-    if entries.iter().all(|(_, v)| *v == 0.0) {
+    if entries.is_empty() {
         return vec![];
     }
     let (lo, hi) = entries.split_at(entries.len() / 2);

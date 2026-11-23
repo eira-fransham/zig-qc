@@ -77,7 +77,9 @@ impl BitSet {
     }
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().enumerate().flat_map(|(w, &bits)| {
-            (0..64).filter(move |b| bits & (1 << b) != 0).map(move |b| w * 64 + b)
+            (0..64)
+                .filter(move |b| bits & (1 << b) != 0)
+                .map(move |b| w * 64 + b)
         })
     }
 }
@@ -258,7 +260,16 @@ mod tests {
         // a = ..; use a; b = ..; use b; c = ..; d = ..; use c; use d
         let vars = [var(F), var(F), var(F), var(F)];
         let b = Block {
-            events: vec![Def(0), Use(0), Def(1), Use(1), Def(2), Def(3), Use(2), Use(3)],
+            events: vec![
+                Def(0),
+                Use(0),
+                Def(1),
+                Use(1),
+                Def(2),
+                Def(3),
+                Use(2),
+                Use(3),
+            ],
             ..Default::default()
         };
         let c = colour(&vars, &[b]);
@@ -304,10 +315,7 @@ mod tests {
 
     #[test]
     fn parameters_are_reused_after_their_last_use() {
-        let vars = [
-            Var { ty: F, param: true },
-            var(F),
-        ];
+        let vars = [Var { ty: F, param: true }, var(F)];
         let b = Block {
             events: vec![Use(0), Def(1), Use(1)],
             ..Default::default()
@@ -346,26 +354,24 @@ mod tests {
         // A loop swapping two parameters: (p, q) = (q + 1, p). Each source
         // is read by the other copy, so no destination may share with it.
         let vars = [var(F), var(F), var(F)];
-        let blocks = [
-            Block {
-                events: vec![Use(0), Use(1), Def(2), Use(2)],
-                term_uses: vec![2, 0],
-                term_defs: vec![0, 1],
-                edges: vec![vec![
-                    Copy {
-                        dest: 0,
-                        plain: None,
-                        reads: vec![2],
-                    },
-                    Copy {
-                        dest: 1,
-                        plain: Some(0),
-                        reads: vec![0],
-                    },
-                ]],
-                succs: vec![0],
-            },
-        ];
+        let blocks = [Block {
+            events: vec![Use(0), Use(1), Def(2), Use(2)],
+            term_uses: vec![2, 0],
+            term_defs: vec![0, 1],
+            edges: vec![vec![
+                Copy {
+                    dest: 0,
+                    plain: None,
+                    reads: vec![2],
+                },
+                Copy {
+                    dest: 1,
+                    plain: Some(0),
+                    reads: vec![0],
+                },
+            ]],
+            succs: vec![0],
+        }];
         let c = colour(&vars, &blocks);
         assert_ne!(c[0], c[1]);
         assert_ne!(c[1], c[2]);

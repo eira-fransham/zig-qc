@@ -181,9 +181,9 @@ impl Uf {
         match &c.kind {
             None => c.kind = Some((k, why.to_string())),
             Some((old, _)) if *old == k => {}
-            Some((old, old_why)) => bail!(
-                "type conflict: a value is used as {old} ({old_why}) and as {k} ({why})"
-            ),
+            Some((old, old_why)) => {
+                bail!("type conflict: a value is used as {old} ({old_why}) and as {k} ({why})")
+            }
         }
         Ok(())
     }
@@ -375,7 +375,10 @@ impl Infer {
             inf.globals.insert(g, v);
         }
         for (&f, info) in &ctx.funcs {
-            if matches!(info.kind, FuncKind::Builtin(None) | FuncKind::UnnamedBuiltin) {
+            if matches!(
+                info.kind,
+                FuncKind::Builtin(None) | FuncKind::UnnamedBuiltin
+            ) {
                 let sig = &ctx.module.signatures[ctx.module.funcs[f].sig()];
                 let mut vs = |ts: &[Type]| -> Result<Vec<Var>> {
                     ts.iter()
@@ -420,7 +423,9 @@ impl Infer {
     }
 
     fn body<'a>(ctx: &'a Ctx<'_>, f: Func) -> &'a FunctionBody {
-        ctx.module.funcs[f].body().expect("local function has a body")
+        ctx.module.funcs[f]
+            .body()
+            .expect("local function has a body")
     }
 
     /// Create the variables of `f`.
@@ -499,7 +504,8 @@ impl Infer {
                 for (a, (&arg, &(_, p))) in target.args.iter().zip(params).enumerate() {
                     let av = self.operand(body, f, site, term_arg(t, a), arg);
                     let pv = self.funcs[&f].vals[&p];
-                    self.uf.union(pv, av, 0, &format!("branch to {}", target.block))?;
+                    self.uf
+                        .union(pv, av, 0, &format!("branch to {}", target.block))?;
                 }
             }
             if let Terminator::Return { values } = &b.terminator {
@@ -591,7 +597,8 @@ impl Infer {
             O::Call { function_index } => self.call(ctx, f, body, v, *function_index)?,
             O::CallIndirect { sig_index, .. } => {
                 let idx = opnd(self, a.len() - 1);
-                self.uf.set_kind(idx, Kind::Func, &why("an indirect call"))?;
+                self.uf
+                    .set_kind(idx, Kind::Func, &why("an indirect call"))?;
                 self.uf.exact(idx, &why("an indirect call"))?;
                 // Arguments and results are QuakeC values, but their kinds
                 // are only constrained by their wasm types (unknown kinds
@@ -617,6 +624,16 @@ impl Infer {
                 "reference types are not supported; use plain function pointers \
                  (`*const fn`) for QuakeC functions"
             ),
+            // A number, or a pointer stored in static data (a string
+            // literal or a function, see `__wasm_apply_data_relocs`): typed by
+            // its uses.
+            O::I32Load { .. } => {
+                let x = opnd(self, 0);
+                self.uf.set_kind(x, Kind::Float, &why("a memory address"))?;
+                if let Some(r) = res {
+                    self.uf.exact(r, &why("a load"))?;
+                }
+            }
             op => {
                 // Everything else works on numbers or vectors, by wasm type.
                 let mut vars: Vec<Var> = (0..a.len()).map(|i| opnd(self, i)).collect();
@@ -659,7 +676,12 @@ impl Infer {
         match info.kind {
             FuncKind::Local => {
                 let callee_ft = &self.funcs[&callee];
-                let sig: Vec<Var> = callee_ft.params.iter().chain(&callee_ft.rets).copied().collect();
+                let sig: Vec<Var> = callee_ft
+                    .params
+                    .iter()
+                    .chain(&callee_ft.rets)
+                    .copied()
+                    .collect();
                 let callee_scc = callee_ft.scc;
                 let same_scc = callee_scc == self.funcs[&f].scc;
                 let actual: Vec<Var> = ops.iter().copied().chain(res).collect();
@@ -667,8 +689,7 @@ impl Infer {
                 for (i, (&p, &x)) in sig.iter().zip(&actual).enumerate() {
                     let what = why((i < ops.len()).then_some(i));
                     let (r, pot) = self.uf.find(p);
-                    let quantified =
-                        !same_scc && self.quantified[callee_scc].contains(&r);
+                    let quantified = !same_scc && self.quantified[callee_scc].contains(&r);
                     if quantified {
                         let fresh = match inst.iter().find(|(q, _)| *q == r) {
                             Some(&(_, fresh)) => fresh,
@@ -930,7 +951,10 @@ impl Infer {
         let (ps, rs) = self.imports.get(&f)?.clone();
         let mut kinds = |vs: Vec<Var>| -> Vec<Kind> {
             vs.into_iter()
-                .map(|v| self.ground(&BTreeMap::new(), v).map_or(Kind::Float, |(k, _)| k))
+                .map(|v| {
+                    self.ground(&BTreeMap::new(), v)
+                        .map_or(Kind::Float, |(k, _)| k)
+                })
                 .collect()
         };
         Some((kinds(ps), kinds(rs)))

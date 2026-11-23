@@ -128,3 +128,121 @@ pub export fn sundays_on_first(first_year: f32, last_year: f32) f32 {
     }
     return @floatFromInt(count);
 }
+
+// ---- entities, strings and vectors as arguments and results ----
+
+const Entity = defs.Entity;
+
+const armor = defs.userField(f32, "armor");
+const last_dir = defs.userGlobal(Vector, "last_dir");
+
+/// Damage absorbed by up to half by armor. Kills the entity (renaming it)
+/// at 0 health.
+pub export fn take_damage(e: Entity, dmg: f32) Entity {
+    var d = dmg;
+    const a = e.get(armor);
+    if (a > 0) {
+        const absorbed = @min(a, d * 0.5);
+        e.set(armor, a - absorbed);
+        d -= absorbed;
+    }
+    const h = e.get(.health) - d;
+    e.set(.health, h);
+    if (h <= 0) e.set(.classname, String.lit("corpse"));
+    return e;
+}
+
+/// A vector field.
+pub export fn speed_sq(e: Entity) f32 {
+    const v = e.get(.velocity);
+    return defs.dot(v, v);
+}
+
+/// A string field compared with a string argument.
+pub export fn is_named(e: Entity, n: String) f32 {
+    return if (e.get(.classname).eql(n)) 1 else 0;
+}
+
+/// Null entities and strings: 1 if `e` is null, plus 2 if `s` is.
+pub export fn null_flags(e: Entity, s: String) f32 {
+    var flags: f32 = 0;
+    if (e.isNull()) flags += 1;
+    if (s.isNull()) flags += 2;
+    return flags;
+}
+
+/// Follows `.owner` links: the total health along the chain, in a loop over
+/// entities.
+pub export fn chain_health(e: Entity) f32 {
+    var total: f32 = 0;
+    var cur = e;
+    while (!cur.isNull()) : (cur = cur.get(.owner)) total += cur.get(.health);
+    return total;
+}
+
+/// One function used at two QuakeC types: it is emitted once per type.
+noinline fn choose(c: bool, a: u64, b: u64) u64 {
+    return if (c) a else b;
+}
+
+/// The health of `a` or `b`.
+pub export fn pick_health(c: f32, a: Entity, b: Entity) f32 {
+    const e: Entity = @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
+    return e.get(.health);
+}
+
+/// Whether `a` or `b` is "axe".
+pub export fn pick_is_axe(c: f32, a: String, b: String) f32 {
+    const s: String = @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
+    return if (s.eql(String.lit("axe"))) 1 else 0;
+}
+
+/// LLVM merges these (they are the same in wasm): one function, exported
+/// under both names.
+pub export fn pick_entity(c: f32, a: Entity, b: Entity) Entity {
+    return @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
+}
+
+pub export fn pick_string(c: f32, a: String, b: String) String {
+    return @enumFromInt(choose(c != 0, @intFromEnum(a), @intFromEnum(b)));
+}
+
+/// A string literal chosen by a `switch`.
+pub export fn weapon_name(w: f32) String {
+    const i: u32 = @intFromFloat(w);
+    return switch (i) {
+        1 => String.lit("axe"),
+        2 => String.lit("shotgun"),
+        3 => String.lit("nailgun"),
+        4 => String.lit("rocket launcher"),
+        else => String.lit("none"),
+    };
+}
+
+/// Vector arguments and result, and a vector global.
+pub export fn midpoint(a: Vector, b: Vector) Vector {
+    last_dir.set(b - a);
+    return (a + b) * @as(Vector, @splat(0.5));
+}
+
+/// The `self` global: heals it, up to its `max_health`.
+pub export fn heal_self(by: f32) f32 {
+    const s = defs.self.get();
+    const h = @min(s.get(.health) + by, s.get(.max_health));
+    s.set(.health, h);
+    return h;
+}
+
+fn add_frags(e: Entity, n: f32) callconv(.c) void {
+    e.set(.frags, e.get(.frags) + n);
+}
+
+/// A function stored in an entity field, then called through it with
+/// arguments.
+pub export fn call_through_field(e: Entity) Entity {
+    e.set(.think, defs.func(add_frags));
+    const f = defs.callAs(fn (Entity, f32) callconv(.c) void, e.get(.think));
+    f(e, 1);
+    f(e, 2);
+    return e;
+}

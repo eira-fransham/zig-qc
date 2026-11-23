@@ -270,6 +270,18 @@ fn polymorphic() {
 }
 
 #[test]
+fn integers() {
+    insta::assert_snapshot!(translate_wat("integers.wat"));
+    check_compiles(&wat::parse_file(fixture("integers.wat")).unwrap(), "");
+}
+
+#[test]
+fn llvm_idioms() {
+    insta::assert_snapshot!(translate_wat("llvm_idioms.wat"));
+    check_compiles(&wat::parse_file(fixture("llvm_idioms.wat")).unwrap(), "");
+}
+
+#[test]
 fn function_pointer_errors() {
     let base = r#"(import "env" "__indirect_function_table" (table 2 funcref))
         (import "env" "__table_base" (global $tb i32))
