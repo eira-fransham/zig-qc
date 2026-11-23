@@ -246,6 +246,8 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             crate::prepare::narrow_extended_lanes(body);
             crate::prepare::float_sign_tests(body);
             crate::prepare::bool_offsets_to_select(body);
+            // Passes rewrite terminators directly; emission uses the CFG.
+            body.recompute_edges();
         }
     }
     let module = module;

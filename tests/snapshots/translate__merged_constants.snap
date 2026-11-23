@@ -76,12 +76,9 @@ void br_merge(float p0) {
 }
 
 void loop_forgets(float p0) {
-b2:
-    if (!(p0)) {
-        self.think = __wasm_b;
-        return;
-    }
-    goto b2;
+    do {
+    } while (p0);
+    self.think = __wasm_b;
 }
 
 void bool_offset(float p0) {

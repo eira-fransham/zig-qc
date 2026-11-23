@@ -5,6 +5,7 @@ pub mod alloc;
 pub mod data;
 pub mod emit;
 pub mod infer;
+pub mod loops;
 pub mod memory;
 pub mod prepare;
 pub mod qc;

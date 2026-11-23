@@ -75,6 +75,12 @@ fn control_flow() {
 }
 
 #[test]
+fn loops() {
+    insta::assert_snapshot!(translate_wat("loops.wat"));
+    check_compiles(&wat::parse_file(fixture("loops.wat")).unwrap(), "");
+}
+
+#[test]
 fn intrinsics() {
     insta::assert_snapshot!(translate_wat("intrinsics.wat"));
     check_compiles(&wat::parse_file(fixture("intrinsics.wat")).unwrap(), "");

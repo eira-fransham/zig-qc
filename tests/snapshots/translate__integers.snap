@@ -36,17 +36,15 @@ float wrap(float p0) {
     local vector l0;
     local vector t0;
     l0 = '0 0 0';
-b2:
-    l0 = (l0 + '1 1 1');
-    t0_x = ((0 - (l0_x != 3)) ? l0_x : 0);
-    t0_y = ((0 - (l0_y != 5)) ? l0_y : 0);
-    t0_z = ((0 - (l0_z != 0)) ? l0_z : 0);
-    l0 = t0;
-    p0 = (p0 - 1);
-    if (!(p0)) {
-        return (l0_x + l0_y);
-    }
-    goto b2;
+    do {
+        l0 = (l0 + '1 1 1');
+        t0_x = ((0 - (l0_x != 3)) ? l0_x : 0);
+        t0_y = ((0 - (l0_y != 5)) ? l0_y : 0);
+        t0_z = ((0 - (l0_z != 0)) ? l0_z : 0);
+        l0 = t0;
+        p0 = (p0 - 1);
+    } while (p0);
+    return (l0_x + l0_y);
 }
 
 float count_lt(float p0, float p1, float p2) {

@@ -55,12 +55,10 @@ float count_to(float p0) {
     local float l0;
     p0 = (p0 | p0);
     l0 = 0;
-b3:
-    if ((l0 >= p0)) {
-        return l0;
+    while (!((l0 >= p0))) {
+        l0 = (l0 + 1);
     }
-    l0 = (l0 + 1);
-    goto b3;
+    return l0;
 }
 
 float is_negative(float p0) {

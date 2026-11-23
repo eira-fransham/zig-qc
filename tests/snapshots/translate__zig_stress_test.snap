@@ -159,11 +159,9 @@ float sum_to(float p0) {
     local float l1;
     l0 = 0;
     l1 = 0;
-b2:
-    if ((p0 > l0)) {
+    while ((p0 > l0)) {
         l1 = (l0 + l1);
         l0 = (l0 + 1);
-        goto b2;
     }
     return l1;
 }

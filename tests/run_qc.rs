@@ -317,6 +317,84 @@ fn fixture_control_flow() {
     }
 }
 
+/// `tests/fixtures/loops.wat`: `while`, `do ... while` and `while (1)`
+/// loops, nested, with `break`, `continue`, `return` and `goto`s to an
+/// outer loop or out of a `switch`. Checked against these reimplementations.
+#[test]
+fn fixture_loops() {
+    let Some(progs) = fixture_progs("loops.wat") else {
+        return;
+    };
+    let check = |func, args: &[f32], expected| check_in(&progs, func, args, None, expected);
+    let nested = |n: i32| {
+        let (mut i, mut c) = (0, 0);
+        'outer: while i < n {
+            let mut j = 0;
+            while j < i {
+                j += 1;
+                if j == 2 {
+                    continue;
+                }
+                if i == 5 && j == 3 {
+                    i += 1;
+                    continue 'outer;
+                }
+                if i * j > 30 {
+                    break 'outer;
+                }
+                c += 1;
+            }
+            c += 100;
+            i += 1;
+        }
+        c
+    };
+    for n in [0, 1, 3, 6, 7, 10] {
+        check("nested", &[n as f32], nested(n) as f32);
+    }
+    let do_while = |n: i32| {
+        let (mut i, mut acc) = (0, 0);
+        loop {
+            acc += i * i;
+            i += 1;
+            if i >= n {
+                break acc;
+            }
+        }
+    };
+    for n in [0, 1, 2, 5] {
+        check("do_while", &[n as f32], do_while(n) as f32);
+    }
+    // `g` counts up to `n` (at least once), and `k` by 2 for each but the
+    // last.
+    for (n, r) in [(0.0, 1.0), (1.0, 1.0), (3.0, 7.0)] {
+        check("header_effects", &[n], r);
+    }
+    let switch_loop = |n: i32| {
+        let (mut i, mut acc) = (0, 0);
+        loop {
+            i += 1;
+            if i > n {
+                break acc;
+            }
+            match i % 4 {
+                0 => {}
+                1 => acc += i,
+                2 if acc > 50 => return acc * 1000,
+                2 => {}
+                _ if i > 9 => break acc,
+                _ => acc += 100,
+            }
+        }
+    };
+    for n in [0, 1, 3, 5, 7, 9, 12, 20] {
+        check("switch_loop", &[n as f32], switch_loop(n) as f32);
+    }
+    for (n, r) in [(0.0, 0.0), (1.0, 1.0), (16.0, 4.0), (17.0, -1.0)] {
+        check("find_root", &[n], r);
+    }
+}
+
 /// `tests/fixtures/integers.wat`: integer division and remainder, bit tests,
 /// and `i32x4` counters and masks.
 #[test]

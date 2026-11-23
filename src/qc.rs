@@ -438,6 +438,12 @@ pub enum Stmt {
     /// next arm: each ends in a `break`, `return` or `goto`.
     Switch(Expr, Vec<(Vec<f32>, Vec<Stmt>)>, Vec<Stmt>),
     Break,
+    /// `while (c) { ... }` (`while (1)` for a constant 1).
+    While(Expr, Vec<Stmt>),
+    /// `do { ... } while (c);`. In fteqcc, `continue` in one jumps to the
+    /// top of its body, not to the condition.
+    DoWhile(Vec<Stmt>, Expr),
+    Continue,
     Goto(String),
     Label(String),
     Comment(String),
@@ -465,8 +471,15 @@ impl Stmt {
                     s.visit_locals_mut(f);
                 }
             }
+            Stmt::While(c, body) | Stmt::DoWhile(body, c) => {
+                c.visit_locals_mut(f);
+                for s in body {
+                    s.visit_locals_mut(f);
+                }
+            }
             Stmt::Return(None)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Goto(_)
             | Stmt::Label(_)
             | Stmt::Comment(_) => {}
@@ -541,6 +554,29 @@ impl Stmt {
             }
             Stmt::Break => {
                 let _ = writeln!(out, "{pad}break;");
+            }
+            Stmt::Continue => {
+                let _ = writeln!(out, "{pad}continue;");
+            }
+            Stmt::While(c, body) => {
+                out.push_str(&pad);
+                out.push_str("while (");
+                c.render(tv, out);
+                out.push_str(") {\n");
+                for s in body {
+                    s.render(tv, indent + 1, out);
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            Stmt::DoWhile(body, c) => {
+                let _ = writeln!(out, "{pad}do {{");
+                for s in body {
+                    s.render(tv, indent + 1, out);
+                }
+                out.push_str(&pad);
+                out.push_str("} while (");
+                c.render(tv, out);
+                out.push_str(");\n");
             }
             Stmt::Goto(l) => {
                 let _ = writeln!(out, "{pad}goto {l};");
