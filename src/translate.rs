@@ -733,6 +733,7 @@ fn describe_type(t: Type) -> String {
         Type::I32 => "an i32".into(),
         Type::F32 => "an f32".into(),
         Type::V128 => "a v128".into(),
+        Type::I64 => "an i64 (64-bit integers aren't supported)".into(),
         t => format!("{t:?}"),
     }
 }

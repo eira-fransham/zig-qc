@@ -1,8 +1,8 @@
 (module
   (import "env" "memory" (memory 1))
   (import "env" "__memory_base" (global $base i32))
-  (import "env" "__quakec_string_literal" (func $lit (param i32) (result i64)))
-  (import "builtin" "dprint" (func $dprint (param i64)))
+  (import "env" "__quakec_string_literal" (func $lit (param i32) (result i32)))
+  (import "builtin" "dprint" (func $dprint (param i32)))
   ;; +0:  every escape class, then a hex digit right after a `\xHH` escape
   ;;      (25 bytes and a NUL)
   ;; +26: "yes", +30: "no", +33: ""
@@ -16,10 +16,10 @@
     (local $b i32)
     (call $dprint (call $lit (local.tee $b (global.get $base))))
     (call $dprint (call $lit (i32.add (local.get $b) (i32.const 26)))))
-  (func (export "empty") (result i64)
+  (func (export "empty") (result i32)
     (call $lit (i32.add (global.get $base) (i32.const 33))))
   ;; A literal chosen at runtime.
-  (func (export "choose") (param $x i32) (result i64)
+  (func (export "choose") (param $x i32) (result i32)
     (call $lit
       (select
         (i32.add (global.get $base) (i32.const 26))

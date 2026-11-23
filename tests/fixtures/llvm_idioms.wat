@@ -2,7 +2,7 @@
 (module
   (import "env" "memory" (memory 1))
   (import "env" "__memory_base" (global $base i32))
-  (import "env" "__quakec_string_literal" (func $lit (param i32) (result i64)))
+  (import "env" "__quakec_string_literal" (func $lit (param i32) (result i32)))
   ;; +0: "axe", +4: "shotgun", +12: "none"
   (data (global.get $base) "axe\00shotgun\00none\00\00\00\00")
   ;; +20: a table of 2 string pointers, filled in by relocation.
@@ -14,7 +14,7 @@
 
   ;; A `switch` on 1 and 2: a range check of `w - 1` (unsigned, so 0 is
   ;; out of range), then a load from the pointer table.
-  (func (export "weapon_name") (param $w f32) (result i64)
+  (func (export "weapon_name") (param $w f32) (result i32)
     (local $i i32)
     (local.set $i (i32.sub (i32.trunc_sat_f32_u (local.get $w)) (i32.const 1)))
     (call $lit
@@ -59,7 +59,9 @@
         (i32.xor (i32.reinterpret_f32 (local.get $a)) (i32.reinterpret_f32 (local.get $b)))
         (i32.const 0))))
 
-  ;; One function under two names (LLVM merges identical functions).
-  (func (export "pick_a") (export "pick_b") (param $c f32) (param $x i64) (param $y i64)
-    (result i64)
-    (select (local.get $x) (local.get $y) (f32.ne (local.get $c) (f32.const 0)))))
+  ;; One function under two names (LLVM merges identical functions): the
+  ;; `nextthink` (field 46) of entity `x` or `y`.
+  (func (export "pick_a") (export "pick_b") (param $c f32) (param $x i32) (param $y i32)
+    (result f32)
+    (f32.load offset=184
+      (select (local.get $x) (local.get $y) (f32.ne (local.get $c) (f32.const 0))))))

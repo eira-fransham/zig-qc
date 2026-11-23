@@ -40,6 +40,7 @@ use std::fmt;
 use anyhow::{Result, anyhow, bail, ensure};
 use waffle::{Block, Func, FunctionBody, Global, Operator, Terminator, Type, Value, ValueDef};
 
+use crate::data::StaticData;
 use crate::memory::{self, Cell, CellAccess};
 use crate::qc::QcType;
 use crate::translate::{Ctx, FuncKind, Intrinsic};
@@ -92,7 +93,10 @@ impl Kind {
     /// Whether values of this kind are addresses resolved at compile time
     /// (see the module docs on offsets).
     fn addressed(self) -> bool {
-        matches!(self, Kind::Func | Kind::String | Kind::Field(_) | Kind::Entity)
+        matches!(
+            self,
+            Kind::Func | Kind::String | Kind::Field(_) | Kind::Entity
+        )
     }
 
     /// The kind of an unconstrained value of wasm type `t`.
@@ -343,6 +347,28 @@ pub fn args(body: &FunctionBody, v: Value) -> Vec<Value> {
     }
 }
 
+/// The constant part of `v`: the sum of the constants added along a chain
+/// of `x + k` and `x - k`.
+fn const_part(body: &FunctionBody, v: Value) -> i64 {
+    let v = resolve(body, v);
+    if let Some(c) = const_val(body, v) {
+        return c;
+    }
+    let ValueDef::Operator(op @ (Operator::I32Add | Operator::I32Sub), _, _) = &body.values[v]
+    else {
+        return 0;
+    };
+    let a = args(body, v);
+    match (op, const_val(body, a[0]), const_val(body, a[1])) {
+        (_, None, Some(k)) => {
+            let k = if *op == Operator::I32Sub { -k } else { k };
+            const_part(body, a[0]) + k
+        }
+        (Operator::I32Add, Some(k), None) => k + const_part(body, a[1]),
+        _ => 0,
+    }
+}
+
 /// The wasm type of a value.
 pub fn wasm_ty(body: &FunctionBody, v: Value) -> Option<Type> {
     match &body.values[resolve(body, v)] {
@@ -490,7 +516,11 @@ impl Infer {
             }
             Ok(())
         };
-        for t in body.rets.iter().chain(body.blocks[body.entry].params.iter().map(|(t, _)| t)) {
+        for t in body
+            .rets
+            .iter()
+            .chain(body.blocks[body.entry].params.iter().map(|(t, _)| t))
+        {
             no_i64(*t)?;
         }
         for (block, b) in body.blocks.entries() {
@@ -706,6 +736,10 @@ impl Infer {
                     let k = match t {
                         Type::V128 => Kind::Vector,
                         Type::F32 | Type::I32 => Kind::Float,
+                        Type::I64 => bail!(
+                            "64-bit integers aren't supported (`{op:?}` in `{fname}`): QuakeC \
+                             numbers are floats"
+                        ),
                         other => bail!("unsupported operator {op:?} on {other:?}"),
                     };
                     self.uf.set_kind(x, k, &why(&format!("`{op:?}`")))?;
@@ -750,7 +784,8 @@ impl Infer {
         if let Some(x) = scalar
             && cells[0].cell != Cell::I32
         {
-            self.uf.set_kind(x, Kind::Float, &why("a float load or store"))?;
+            self.uf
+                .set_kind(x, Kind::Float, &why("a float load or store"))?;
         }
         let access = Access {
             func: f,
@@ -760,8 +795,11 @@ impl Infer {
             cells,
             scalar,
         };
-        if const_val(body, a[0]).is_some() {
-            // A QuakeC global, or static data.
+        // A QuakeC global, or static data: a constant address, or one whose
+        // constant part is in static data (e.g. a table indexed by a
+        // variable). Entity fields are at small offsets.
+        let in_data = StaticData::is_data_addr((const_part(body, a[0]) + offset as i64) as u64);
+        if const_val(body, a[0]).is_some() || in_data {
             self.memory_access(&access, why)
         } else {
             self.pending.push(access);
@@ -786,7 +824,12 @@ impl Infer {
 
     /// `access` is of entity fields: type what is loaded or stored by the
     /// fields.
-    fn field_access(&mut self, ctx: &Ctx<'_>, access: &Access, why: &dyn Fn(&str) -> String) -> Result<()> {
+    fn field_access(
+        &mut self,
+        ctx: &Ctx<'_>,
+        access: &Access,
+        why: &dyn Fn(&str) -> String,
+    ) -> Result<()> {
         let (r, pot) = self.uf.find(access.addr.1);
         let anchor = match &self.uf.class[r as usize].anchor {
             Some((a, _)) => *a,
@@ -885,8 +928,11 @@ impl Infer {
                 }
                 let var = self.funcs[&access.func].vals[&base];
                 let fname = &ctx.funcs[&access.func].name;
-                self.uf
-                    .typed(var, Kind::Entity, &format!("a memory address (an entity) in `{fname}`"))?;
+                self.uf.typed(
+                    var,
+                    Kind::Entity,
+                    &format!("a memory address (an entity) in `{fname}`"),
+                )?;
             }
         }
         Ok(())
@@ -1024,7 +1070,7 @@ impl Infer {
                 kind(uf, res.unwrap(), Kind::Float, None)?;
             }
             I::FieldRefString => {
-                kind(uf, ops[], Kind::Field(QcType::String), Some(0))?;
+                kind(uf, ops[0], Kind::Field(QcType::String), Some(0))?;
                 uf.exact(ops[0], &why(Some(0)))?;
                 uf.union(res.unwrap(), ops[0], 0, &why(None))?;
             }

@@ -733,7 +733,7 @@ mod tests {
             cell,
             const_store: false,
         };
-        assert!(slots(&[acc(-16, Cell::I64), acc(-12, Cell::I32)]).is_err());
+        assert!(slots(&[acc(-16, Cell::I32), acc(-14, Cell::Narrow(16))]).is_err());
         assert!(slots(&[acc(-16, Cell::F32), acc(-16, Cell::I32)]).is_err());
         let ok = slots(&[
             acc(-16, Cell::F32),

@@ -251,13 +251,18 @@ fn add_frags(e: Entity, n: f32) callconv(.c) void {
 }
 
 /// A function stored in an entity field, then called through it with
-/// arguments.
+/// arguments (`wasm-opt` inlines `callThink`, but the call is still through
+/// the loaded field).
 pub export fn call_through_field(e: Entity) Entity {
     e.think = defs.func(add_frags);
+    callThink(e);
+    return e;
+}
+
+noinline fn callThink(e: Entity) void {
     const f = defs.callAs(fn (Entity, f32) callconv(.c) void, e.think);
     f(e, 1);
     f(e, 2);
-    return e;
 }
 
 // ---- the shadow stack: volatile locals live in memory ----

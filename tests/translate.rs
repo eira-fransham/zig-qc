@@ -93,13 +93,13 @@ fn builtins() {
 #[test]
 fn builtin_signature_mismatch_is_an_error() {
     let err =
-        translate_err(r#"(module (import "builtin" "floor" (func (param i64) (result f32))))"#);
+        translate_err(r#"(module (import "builtin" "floor" (func (param v128) (result f32))))"#);
     assert!(
-        err.contains("parameter 0 should be float, but the import has an i64 handle"),
+        err.contains("parameter 0 should be float, but the import has a v128"),
         "{err}"
     );
     let err =
-        translate_err(r#"(module (import "builtin" "spawn" (func (param f32) (result i64))))"#);
+        translate_err(r#"(module (import "builtin" "spawn" (func (param f32) (result i32))))"#);
     assert!(
         err.contains("expected 0 parameters, but the import has 1"),
         "{err}"
@@ -131,10 +131,10 @@ fn fields() {
 #[test]
 fn field_errors() {
     let load =
-        r#"(import "env" "__quakec_load_entity_field_float" (func (param i64 i32) (result f32)))"#;
+        r#"(import "env" "__quakec_load_entity_field_float" (func (param i32 i32) (result f32)))"#;
     // A float access to a string field.
     let err = translate_err(&format!(
-        r#"(module {load} (func (export "f") (param i64) (result f32) (call 0 (local.get 0) (i32.const 28))))"#
+        r#"(module {load} (func (export "f") (param i32) (result f32) (call 0 (local.get 0) (i32.const 28))))"#
     ));
     assert!(
         err.contains("entity field offset 28 is not a known float field"),
@@ -142,7 +142,7 @@ fn field_errors() {
     );
     // Past the end of the system fields.
     let err = translate_err(&format!(
-        r#"(module {load} (func (export "f") (param i64) (result f32) (call 0 (local.get 0) (i32.const 105))))"#
+        r#"(module {load} (func (export "f") (param i32) (result f32) (call 0 (local.get 0) (i32.const 105))))"#
     ));
     assert!(
         err.contains("entity field offset 105 is not a known float field"),
@@ -150,7 +150,7 @@ fn field_errors() {
     );
     // A computed offset.
     let err = translate_err(&format!(
-        r#"(module {load} (func (export "f") (param i64 i32) (result f32)
+        r#"(module {load} (func (export "f") (param i32 i32) (result f32)
             (call 0 (local.get 0) (i32.mul (local.get 1) (i32.const 3)))))"#
     ));
     assert!(err.contains("type conflict"), "{err}");
@@ -222,24 +222,24 @@ fn string_literals() {
 #[test]
 fn string_literal_errors() {
     let base = r#"(import "env" "memory" (memory 1)) (import "env" "__memory_base" (global $b i32))
-        (import "env" "__quakec_string_literal" (func $lit (param i32) (result i64)))
+        (import "env" "__quakec_string_literal" (func $lit (param i32) (result i32)))
         (data (global.get $b) "abcd")"#;
     // A computed address.
     let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (param i32) (result i64)
+        r#"(module {base} (func (export "f") (param i32) (result i32)
             (call $lit (i32.mul (local.get 0) (i32.const 2)))))"#
     ));
     assert!(err.contains("type conflict"), "{err}");
     assert!(err.contains("as string"), "{err}");
     // No NUL terminator.
     let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (result i64)
+        r#"(module {base} (func (export "f") (result i32)
             (call $lit (global.get $b))))"#
     ));
     assert!(err.contains("not a NUL-terminated string"), "{err}");
     // Outside of static data.
     let err = translate_err(&format!(
-        r#"(module {base} (func (export "f") (result i64)
+        r#"(module {base} (func (export "f") (result i32)
             (call $lit (i32.add (global.get $b) (i32.const 10)))))"#
     ));
     assert!(err.contains("not a NUL-terminated string"), "{err}");
@@ -285,8 +285,8 @@ fn llvm_idioms() {
 fn function_pointer_errors() {
     let base = r#"(import "env" "__indirect_function_table" (table 2 funcref))
         (import "env" "__table_base" (global $tb i32))
-        (import "env" "__quakec_load_entity" (func $self (param i32) (result i64)))
-        (import "env" "__quakec_store_entity_field_fn" (func $set (param i64 i32 i32)))
+        (import "env" "__quakec_load_entity" (func $self (param i32) (result i32)))
+        (import "env" "__quakec_store_entity_field_fn" (func $set (param i32 i32 i32)))
         (elem (global.get $tb) func $a $a)
         (func $a)"#;
     // A computed function pointer.
@@ -348,6 +348,64 @@ fn global_address_errors() {
 }
 
 #[test]
+fn entity_struct() {
+    insta::assert_snapshot!(translate_wat("entity_struct.wat"));
+    check_compiles(&wat::parse_file(fixture("entity_struct.wat")).unwrap(), "");
+}
+
+#[test]
+fn entity_struct_errors() {
+    let cases = [
+        // Beyond the system fields.
+        (
+            "(f32.load offset=4000 (local.get $e))",
+            "is not a system field",
+        ),
+        // Inside a field.
+        ("(f32.load offset=194 (local.get $e))", "isn't a field"),
+        // A float field read as an `i32`.
+        (
+            "(f32.convert_i32_s (i32.load offset=192 (local.get $e)))",
+            "is accessed as i32",
+        ),
+        // `&e.health` passed to a function.
+        (
+            "(drop (f32.load offset=192 (local.get $e))) (call $g (i32.add (local.get $e) (i32.const 192))) (f32.const 0)",
+            "a pointer to an entity's field is used as a value",
+        ),
+        // An entity or a pointer to one of its fields.
+        (
+            "(f32.load (select (local.get $e) (i32.add (local.get $e) (i32.const 192)) (local.get $c)))",
+            "inconsistent offsets",
+        ),
+    ];
+    for (body, msg) in cases {
+        let wat = format!(
+            r#"(module (import "env" "memory" (memory 1))
+                (import "env" "__quakec_load_entity_field_float" (func $lf (param i32 i32) (result f32)))
+                (func $g (param i32) (drop (call $lf (local.get 0) (i32.const 0))))
+                (func (export "f") (param $e i32) (param $c i32) (result f32) {body}))"#
+        );
+        let err = translate_err(&wat);
+        assert!(err.contains(msg), "{body}: expected {msg:?} in {err}");
+    }
+}
+
+#[test]
+fn i64_is_an_error() {
+    for wat in [
+        r#"(module (func (export "f") (param i64)))"#,
+        r#"(module (func (export "f") (result i32) (i32.wrap_i64 (i64.const 1))))"#,
+    ] {
+        let err = translate_err(wat);
+        assert!(
+            err.contains("64-bit integers aren't supported"),
+            "{wat}: {err}"
+        );
+    }
+}
+
+#[test]
 fn stack() {
     insta::assert_snapshot!(translate_wat("stack.wat"));
     check_compiles(&wat::parse_file(fixture("stack.wat")).unwrap(), "");
@@ -380,7 +438,7 @@ fn stack_errors() {
             "non-constant offset",
         ),
         (
-            "(i64.store (local.get $fp) (i64.const 1)) (drop (i32.load offset=4 (local.get $fp)))",
+            "(i32.store (local.get $fp) (i32.const 1)) (drop (i32.load16_u offset=2 (local.get $fp)))",
             "overlap",
         ),
         (

@@ -22,8 +22,8 @@ float sat_sub(float p0);
 float count_to(float p0);
 float is_negative(float p0);
 float signs_differ(float p0, float p1);
-entity pick_a(float p0, entity p1, entity p2);
-entity pick_b(float p0, entity p1, entity p2);
+float pick_a(float p0, entity p1, entity p2);
+float pick_b(float p0, entity p1, entity p2);
 
 string weapon_name(float p0) {
     local string l0;
@@ -76,11 +76,13 @@ float signs_differ(float p0, float p1) {
     return ((p0 < 0) != (p1 < 0));
 }
 
-entity pick_a(float p0, entity p1, entity p2) {
-    return ((p0 != 0) ? p1 : p2);
+float pick_a(float p0, entity p1, entity p2) {
+    local entity t0;
+    t0 = ((p0 != 0) ? p1 : p2);
+    return t0.nextthink;
 }
 
-entity pick_b(float p0, entity p1, entity p2) {
-    p1 = pick_a(p0, p1, p2);
-    return p1;
+float pick_b(float p0, entity p1, entity p2) {
+    p0 = pick_a(p0, p1, p2);
+    return p0;
 }

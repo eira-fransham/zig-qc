@@ -4,7 +4,7 @@
 (module
   (import "env" "memory" (memory 1))
   (import "env" "__stack_pointer" (global $sp (mut i32)))
-  (import "env" "__quakec_load_entity_field_float" (func $load_float (param i64 i32) (result f32)))
+  (import "env" "__quakec_load_entity_field_float" (func $load_float (param i32 i32) (result f32)))
 
   ;; Two slots, at `memarg` offsets from the frame.
   (func (export "sum") (param $a f32) (param $b f32) (result f32)
@@ -53,12 +53,12 @@
         (i32.add (local.get $fp) (i32.const 12))
         (f32.ne (local.get $c) (f32.const 0)))))
 
-  ;; An entity in an `i64` slot (field 46 is `nextthink`).
-  (func (export "read_nextthink") (param $e i64) (result f32)
+  ;; An entity in an `i32` slot (field 46 is `nextthink`).
+  (func (export "read_nextthink") (param $e i32) (result f32)
     (local $fp i32)
     (global.set $sp (local.tee $fp (i32.sub (global.get $sp) (i32.const 16))))
-    (i64.store offset=8 (local.get $fp) (local.get $e))
-    (call $load_float (i64.load offset=8 (local.get $fp)) (i32.const 46))
+    (i32.store offset=8 (local.get $fp) (local.get $e))
+    (call $load_float (i32.load offset=8 (local.get $fp)) (i32.const 46))
     (global.set $sp (i32.add (local.get $fp) (i32.const 16))))
 
   ;; A frame that is never used.

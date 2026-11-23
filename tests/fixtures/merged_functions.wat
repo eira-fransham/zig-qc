@@ -6,12 +6,12 @@
   (import "env" "__indirect_function_table" (table 2 funcref))
   (import "env" "__memory_base" (global $mb i32))
   (import "env" "__table_base" (global $tb i32))
-  (import "env" "__quakec_load_entity" (func $load_entity (param i32) (result i64)))
-  (import "env" "__quakec_store_entity_field_fn" (func $store_fn (param i64 i32 i32)))
-  (import "env" "__quakec_store_entity_field_float" (func $store_float (param i64 i32 f32)))
-  (import "env" "__quakec_string_literal" (func $lit (param i32) (result i64)))
-  (import "env" "__quakec_load_entity_field_float" (func $load_float (param i64 i32) (result f32)))
-  (import "builtin" "dprint" (func $dprint (param i64)))
+  (import "env" "__quakec_load_entity" (func $load_entity (param i32) (result i32)))
+  (import "env" "__quakec_store_entity_field_fn" (func $store_fn (param i32 i32 i32)))
+  (import "env" "__quakec_store_entity_field_float" (func $store_float (param i32 i32 f32)))
+  (import "env" "__quakec_string_literal" (func $lit (param i32) (result i32)))
+  (import "env" "__quakec_load_entity_field_float" (func $load_float (param i32 i32) (result f32)))
+  (import "builtin" "dprint" (func $dprint (param i32)))
   (elem (global.get $tb) func $a $b)
   (data (global.get $mb) "on\00no\00speed2\00")
   (func $a)
@@ -19,7 +19,7 @@
   ;; Merged: `self.think = f; self.nextthink = n;`, with the function's
   ;; table offset as a parameter.
   (func $set_think (param $f i32) (param $n f32)
-    (local $self i64)
+    (local $self i32)
     (local.set $self (call $load_entity (i32.const 112)))
     (call $store_fn (local.get $self) (i32.const 44)
       (i32.add (global.get $tb) (local.get $f)))
@@ -34,7 +34,7 @@
   ;; Merged: an entity field offset (here of a user field, named in static
   ;; data) as a parameter. The base address is copied into a local first.
   (func $copy_field (param $fld i32)
-    (local $self i64) (local $base i32)
+    (local $self i32) (local $base i32)
     (local.set $self (call $load_entity (i32.const 112)))
     (local.set $base (global.get $mb))
     (call $store_float (local.get $self) (i32.const 46)

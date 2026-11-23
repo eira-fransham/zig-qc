@@ -91,16 +91,46 @@ fn progs() -> Option<&'static Path> {
         .as_deref()
 }
 
+/// What a function returns.
+#[derive(Clone, Copy, PartialEq)]
+enum Returns {
+    /// A float, entity, string, etc. QuakeC returns values in a 3-float
+    /// return slot, and `run-qc` prints a float (or null) return as the
+    /// whole vector `[x, y, z]`, where `y` and `z` are whatever was left in
+    /// the slot: only `x` is the value.
+    Scalar,
+    /// A vector: all 3 components are checked.
+    Vector,
+}
+
+impl Returns {
+    /// The value returned, from what `run-qc` printed.
+    fn value(self, func: &str, printed: Value) -> Value {
+        match (self, printed) {
+            (Returns::Scalar, Value::Array(mut v)) if v.len() == 3 => v.swap_remove(0),
+            (Returns::Vector, v) => {
+                assert!(
+                    v.as_array().is_some_and(|v| v.len() == 3),
+                    "`{func}` didn't return a vector: {v}"
+                );
+                v
+            }
+            (_, v) => v,
+        }
+    }
+}
+
 /// Run `func(args)` in `progs` with `globals` set (a JSON object, or
-/// `None`), and return what `run-qc` prints, as JSON. Each argument is JSON
-/// (a number, `[x, y, z]`, `null`, or an object for a new entity), or else a
-/// string.
+/// `None`), and return what `run-qc` prints, as JSON, with the return value
+/// read as `returns`. Each argument is JSON (a number, `[x, y, z]`, `null`,
+/// or an object for a new entity), or else a string.
 fn run(
     progs: &Path,
     func: &str,
     args: &[&str],
     globals: Option<&str>,
     print_globals: bool,
+    returns: Returns,
 ) -> Value {
     let mut cmd = Command::new("run-qc");
     if let Some(g) = globals {
@@ -120,19 +150,37 @@ fn run(
         String::from_utf8_lossy(&out.stderr)
     );
     let out = String::from_utf8(out.stdout).unwrap();
-    serde_json::from_str(&out)
-        .unwrap_or_else(|e| panic!("`{func}` printed invalid JSON ({e}): {out:?}"))
+    let mut out: Value = serde_json::from_str(&out)
+        .unwrap_or_else(|e| panic!("`{func}` printed invalid JSON ({e}): {out:?}"));
+    if print_globals {
+        out["return"] = returns.value(func, out["return"].take());
+        out
+    } else {
+        returns.value(func, out)
+    }
 }
 
-/// What `func(args)` in `qc-test` returns, or `None` if it can't be run.
+/// What `func(args)` in `qc-test` returns (not a vector), or `None` if it
+/// can't be run.
 fn call(func: &str, args: &[&str]) -> Option<Value> {
-    Some(run(progs()?, func, args, None, false))
+    Some(run(progs()?, func, args, None, false, Returns::Scalar))
 }
 
-/// What `func(args)` in `qc-test` returns with `globals` set, and the
-/// globals afterwards.
-fn call_globals(func: &str, args: &[&str], globals: Option<&str>) -> Option<(Value, Value)> {
-    let mut out = run(progs()?, func, args, globals, true);
+/// The vector `func(args)` in `qc-test` returns, or `None` if it can't be
+/// run.
+fn call_vector(func: &str, args: &[&str]) -> Option<Value> {
+    Some(run(progs()?, func, args, None, false, Returns::Vector))
+}
+
+/// What `func(args)` in `qc-test` returns (as `returns`) with `globals`
+/// set, and the globals afterwards.
+fn call_globals(
+    func: &str,
+    args: &[&str],
+    globals: Option<&str>,
+    returns: Returns,
+) -> Option<(Value, Value)> {
+    let mut out = run(progs()?, func, args, globals, true, returns);
     let ret = out["return"].take();
     Some((ret, out["globals"].take()))
 }
@@ -148,7 +196,7 @@ fn check(func: &str, args: &[f32], globals: Option<&str>, expected: f32) {
 fn check_in(progs: &Path, func: &str, args: &[f32], globals: Option<&str>, expected: f32) {
     let args: Vec<String> = args.iter().map(f32::to_string).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let got = run(progs, func, &args, globals, false);
+    let got = run(progs, func, &args, globals, false, Returns::Scalar);
     assert_eq!(
         got,
         json!(expected),
@@ -385,25 +433,6 @@ fn polymorphic_function() {
     );
 }
 
-/// `pick_entity` and `pick_string` are one wasm function (LLVM merges them)
-/// with two exports.
-#[test]
-fn merged_exports() {
-    let Some(e) = call(
-        "pick_entity",
-        &["1", r#"{"health": 1}"#, r#"{"health": 2}"#],
-    ) else {
-        return;
-    };
-    assert_eq!(field(&e, "health"), &json!(1.0));
-    assert_eq!(
-        call("pick_entity", &["0", r#"{"health": 1}"#, "null"]).unwrap(),
-        Value::Null
-    );
-    assert_eq!(call("pick_string", &["0", "a", "b"]).unwrap(), json!("b"));
-    assert_eq!(call("pick_string", &["1", "a", "b"]).unwrap(), json!("a"));
-}
-
 /// A `switch` LLVM turns into a range check (an unsigned comparison of
 /// `w - 1`) and a table of string pointers in static data.
 #[test]
@@ -426,7 +455,12 @@ fn string_table() {
 
 #[test]
 fn vector_arguments_and_globals() {
-    let Some((ret, globals)) = call_globals("midpoint", &["[1, 0, -2]", "[3, 4, 2]"], None) else {
+    let Some((ret, globals)) = call_globals(
+        "midpoint",
+        &["[1, 0, -2]", "[3, 4, 2]"],
+        None,
+        Returns::Vector,
+    ) else {
         return;
     };
     assert_eq!(ret, json!([2.0, 2.0, 0.0]));
@@ -437,15 +471,34 @@ fn vector_arguments_and_globals() {
 #[test]
 fn self_global() {
     let s = r#"{"self": {"health": 50, "max_health": 100}}"#;
-    let Some((ret, globals)) = call_globals("heal_self", &["30"], Some(s)) else {
+    let Some((ret, globals)) = call_globals("heal_self", &["30"], Some(s), Returns::Scalar) else {
         return;
     };
     assert_eq!(ret, json!(80.0));
     assert_eq!(field(&globals["self"], "health"), &json!(80.0));
     // Capped at `max_health`.
-    let (ret, globals) = call_globals("heal_self", &["70"], Some(s)).unwrap();
+    let (ret, globals) = call_globals("heal_self", &["70"], Some(s), Returns::Scalar).unwrap();
     assert_eq!(ret, json!(100.0));
     assert_eq!(field(&globals["self"], "health"), &json!(100.0));
+}
+
+/// `self.health -= 1`: fields through the entity pointer.
+#[test]
+fn struct_fields() {
+    let s = r#"{"self": {"health": 5}}"#;
+    let Some((ret, globals)) = call_globals("self_hurt", &[], Some(s), Returns::Scalar) else {
+        return;
+    };
+    assert_eq!(ret, json!(4.0));
+    assert_eq!(field(&globals["self"], "health"), &json!(4.0));
+    // Vector fields: whole, and a component.
+    let e = call("nudge", &[r#"{"origin": [1, 2, 3]}"#, "[10, 20, 30]"]).unwrap();
+    assert_eq!(field(&e, "origin"), &json!([11.0, 22.0, 33.0]));
+    let e = call("lift", &[r#"{"origin": [1, 2, 3]}"#]).unwrap();
+    assert_eq!(field(&e, "origin"), &json!([1.0, 2.0, 11.0]));
+    // `get` and `set` still work.
+    let e = call("old_style", &[r#"{"health": 21}"#]).unwrap();
+    assert_eq!(field(&e, "frags"), &json!(42.0));
 }
 
 /// A function stored in an entity's `.think`, then called through it.
@@ -465,7 +518,7 @@ fn fixture_llvm_idioms() {
     let Some(progs) = fixture_progs("llvm_idioms.wat") else {
         return;
     };
-    let call = |func, args: &[&str]| run(&progs, func, args, None, false);
+    let call = |func, args: &[&str]| run(&progs, func, args, None, false, Returns::Scalar);
     for (w, name) in [
         ("-1", "none"),
         ("0", "none"),
@@ -504,11 +557,10 @@ fn fixture_llvm_idioms() {
             "signs_differ({a}, {b})"
         );
     }
+    let (x, y) = (r#"{"nextthink": 1}"#, r#"{"nextthink": 2}"#);
     for f in ["pick_a", "pick_b"] {
-        let e = call(f, &["1", r#"{"health": 1}"#, r#"{"health": 2}"#]);
-        assert_eq!(field(&e, "health"), &json!(1.0), "{f}");
-        let e = call(f, &["0", r#"{"health": 1}"#, r#"{"health": 2}"#]);
-        assert_eq!(field(&e, "health"), &json!(2.0), "{f}");
+        assert_eq!(call(f, &["1", x, y]), json!(1.0), "{f}");
+        assert_eq!(call(f, &["0", x, y]), json!(2.0), "{f}");
     }
 }
 
@@ -540,7 +592,7 @@ fn stack_locals() {
         json!(42.0)
     );
     assert_eq!(
-        call("volatile_vector", &["[1, 2, 3]"]).unwrap(),
+        call_vector("volatile_vector", &["[1, 2, 3]"]).unwrap(),
         json!([2.0, 3.0, 4.0])
     );
     assert_eq!(call("volatile_flag", &["1"]).unwrap(), json!(1.0));
@@ -555,7 +607,7 @@ fn fixture_stack() {
     let Some(progs) = fixture_progs("stack.wat") else {
         return;
     };
-    let call = |func, args: &[&str]| run(&progs, func, args, None, false);
+    let call = |func, args: &[&str]| run(&progs, func, args, None, false, Returns::Scalar);
     assert_eq!(call("sum", &["2", "3"]), json!(6.0));
     assert_eq!(call("uninit", &[]), json!(3.0));
     assert_eq!(call("count", &["3"]), json!(3.0));

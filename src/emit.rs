@@ -107,6 +107,7 @@ pub fn emit(
 impl Emitter<'_, '_> {
     fn function(&mut self) -> Result<Function> {
         let body = self.body;
+        self.check_entities()?;
         self.count_uses();
         let order = rpo(body);
 
@@ -168,6 +169,37 @@ impl Emitter<'_, '_> {
             locals,
             body: body_stmts,
         })
+    }
+
+    /// Every entity value that isn't computed as `e + k` (a parameter, a
+    /// call or load result, a block parameter...) is an entity, not a
+    /// pointer to one of its fields.
+    fn check_entities(&mut self) -> Result<()> {
+        let body = self.body;
+        for (_, def) in body.blocks.entries() {
+            let values = def
+                .params
+                .iter()
+                .map(|&(_, p)| p)
+                .chain(def.insts.iter().copied());
+            for v in values {
+                let offset = matches!(
+                    &body.values[v],
+                    ValueDef::Operator(Operator::I32Add | Operator::I32Sub, _, _)
+                ) && args(body, v).iter().any(|&a| const_val(body, a).is_some());
+                if offset || !self.inf.funcs[&self.inst.func].has_value(v) {
+                    continue;
+                }
+                if let (Kind::Entity, bias) = self.inf.value(self.inst, v)? {
+                    ensure!(
+                        bias == 0,
+                        "a pointer to an entity's field is used as a value (only field \
+                         accesses, `e.field`, are supported)"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     fn count_uses(&mut self) {
@@ -460,7 +492,10 @@ impl Emitter<'_, '_> {
         match k {
             Kind::StackOffset => bail!("internal error: an unreified shadow stack address"),
             Kind::Entity => {
-                ensure!(addr == 0, "entity constant {addr} (only null, 0, is supported)");
+                ensure!(
+                    addr == 0,
+                    "entity constant {addr} (only null, 0, is supported)"
+                );
                 Ok(Expr::Null)
             }
             Kind::Float => {
@@ -1219,7 +1254,16 @@ impl Emitter<'_, '_> {
                 other => bail!("unsupported type {other:?}"),
             })
         };
-        let params = s.params.iter().map(default).collect::<Result<Vec<_>>>()?;
+        // The arguments' kinds (the last operand is the table index).
+        let body = self.body;
+        let a = args(body, v);
+        let mut params = Vec::new();
+        for (i, &x) in a[..s.params.len()].iter().enumerate() {
+            let (k, _) = self
+                .inf
+                .operand_of(self.inst, body, Site::Inst(v), i as u32, x)?;
+            params.push(k.qc());
+        }
         let ret = match (s.returns.as_slice(), self.uses.contains_key(&v)) {
             ([], _) => QcType::Void,
             ([_], true) => self.kind(v)?.qc(),
@@ -1962,8 +2006,11 @@ fn whole_field(v: Expr) -> Expr {
         && let [Expr::Field(a, x), Expr::Field(b, y), Expr::Field(c, z)] = &**parts
         && a == b
         && b == c
-        && let (Some(f), Some(g), Some(h)) =
-            (x.strip_suffix("_x"), y.strip_suffix("_y"), z.strip_suffix("_z"))
+        && let (Some(f), Some(g), Some(h)) = (
+            x.strip_suffix("_x"),
+            y.strip_suffix("_y"),
+            z.strip_suffix("_z"),
+        )
         && f == g
         && g == h
     {

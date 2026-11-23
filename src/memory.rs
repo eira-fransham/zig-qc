@@ -88,7 +88,9 @@ pub fn cells(op: &O) -> Result<Option<(bool, u32, Vec<CellAccess>)>, String> {
             (true, memory.offset, lanes(&[2 * lane, 2 * lane + 1]))
         }
         op if is_memory(op) => {
-            return Err(format!("`{op}` is not supported (only 32-bit and vector accesses are)"));
+            return Err(format!(
+                "`{op}` is not supported (only 32-bit and vector accesses are)"
+            ));
         }
         _ => return Ok(None),
     }))
@@ -99,4 +101,3 @@ pub fn is_memory(op: &O) -> bool {
     let s = format!("{op:?}");
     s.contains("Load") || s.contains("Store") || s.starts_with("Memory")
 }
-
