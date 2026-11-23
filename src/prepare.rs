@@ -266,6 +266,95 @@ pub fn simplify_params(body: &mut waffle::FunctionBody) {
     }
 }
 
+/// Branch straight past blocks that only branch on (with no instructions):
+/// their predecessors go to the block's target instead, with the block's
+/// parameters replaced by the arguments of each incoming edge. Only if the
+/// parameters aren't used anywhere else (as they no longer have a value).
+/// The target's other arguments dominate the block, so (as it computes
+/// nothing) they dominate its predecessors too. Such a block between a
+/// loop's back edges and its header would otherwise make a second loop
+/// around the first.
+pub fn thread_empty_blocks(body: &mut waffle::FunctionBody) {
+    use std::collections::{HashMap, HashSet};
+    use waffle::{BlockTarget, Terminator};
+    // Values used other than as a branch argument of the block they're a
+    // parameter of.
+    let mut used = HashSet::new();
+    for (_, def) in body.blocks.entries() {
+        for &v in &def.insts {
+            used.extend(
+                crate::infer::args(body, v)
+                    .into_iter()
+                    .map(|a| body.resolve_alias(a)),
+            );
+        }
+        match &def.terminator {
+            Terminator::CondBr { cond: x, .. } | Terminator::Select { value: x, .. } => {
+                used.insert(body.resolve_alias(*x));
+            }
+            Terminator::Return { values } => {
+                used.extend(values.iter().map(|&x| body.resolve_alias(x)));
+            }
+            _ => {}
+        }
+        let own: HashSet<waffle::Value> = def.params.iter().map(|&(_, p)| p).collect();
+        def.terminator.visit_targets(|t| {
+            for &a in &t.args {
+                let a = body.resolve_alias(a);
+                if !own.contains(&a) {
+                    used.insert(a);
+                }
+            }
+        });
+    }
+    let mut fwd: HashMap<waffle::Block, (Vec<waffle::Value>, BlockTarget)> = HashMap::new();
+    for (b, def) in body.blocks.entries() {
+        if b == body.entry || !def.insts.is_empty() {
+            continue;
+        }
+        let Terminator::Br { target } = &def.terminator else {
+            continue;
+        };
+        if target.block == b || def.params.iter().any(|(_, p)| used.contains(p)) {
+            continue;
+        }
+        let params = def.params.iter().map(|&(_, p)| p).collect();
+        let target = BlockTarget {
+            block: target.block,
+            args: target.args.iter().map(|&a| body.resolve_alias(a)).collect(),
+        };
+        fwd.insert(b, (params, target));
+    }
+    if fwd.is_empty() {
+        return;
+    }
+    let blocks: Vec<_> = body.blocks.iter().collect();
+    for b in blocks {
+        let mut term = std::mem::replace(&mut body.blocks[b].terminator, Terminator::None);
+        term.update_targets(|t| {
+            // (A cycle of such blocks is left as it is.)
+            let mut seen = HashSet::new();
+            while let Some((params, next)) = fwd.get(&t.block)
+                && seen.insert(t.block)
+            {
+                let args = next
+                    .args
+                    .iter()
+                    .map(|&a| match params.iter().position(|&q| q == a) {
+                        Some(i) => t.args[i],
+                        None => a,
+                    })
+                    .collect();
+                *t = BlockTarget {
+                    block: next.block,
+                    args,
+                };
+            }
+        });
+        body.blocks[b].terminator = term;
+    }
+}
+
 /// Merge each block that is only reached by an unconditional branch into
 /// the block it comes from, so that values can be used across them without
 /// a local. (waffle's own `merge_blocks` pass is buggy in 0.4.)

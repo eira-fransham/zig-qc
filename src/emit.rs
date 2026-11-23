@@ -1,8 +1,10 @@
 //! Emission of one function instance from SSA form to QuakeC.
 //!
-//! Blocks are laid out in reverse postorder, but with each natural loop's
-//! blocks together (see [`crate::loops`]), each starting with a label (kept
-//! only if something jumps to it). A block with a single incoming edge (see
+//! A block with several predecessors follows its immediate dominator's
+//! code, so that branches to it from the ends of the dominator's branches
+//! fall through, and each natural loop's blocks are together (see
+//! [`crate::loops`]); each starts with a label (kept only if something
+//! jumps to it). A block with a single incoming edge (see
 //! [`nested_blocks`]) is instead emitted inside its predecessor's
 //! terminator: in a branch of its `if` or an arm of its `switch`, or straight
 //! after an unconditional branch. Loops become `while (c)`, `do ... while
@@ -23,10 +25,10 @@ use waffle::{Block, Func, FunctionBody, Operator, Terminator, Type, Value, Value
 
 use crate::alloc;
 use crate::data::{DataKind, StaticData};
-use crate::loops::{Item, Loop, Loops};
 use crate::infer::{
     self, Infer, Instance, Kind, Site, TERM_COND, args, const_val, targets, term_arg, term_ret,
 };
+use crate::loops::{Anchor, Layout, Loop, Loops};
 use crate::qc::{BinOp, Expr, Function, QcType, Sig, Stmt, Ty, UnOp};
 use crate::translate::{Ctx, FuncKind, Intrinsic};
 
@@ -66,6 +68,7 @@ struct Emitter<'a, 'm> {
     /// The blocks each value is used in.
     use_blocks: HashMap<Value, HashSet<Block>>,
     loops: std::rc::Rc<Loops>,
+    layout: std::rc::Rc<Layout>,
     /// The loops being emitted, innermost last.
     loop_ctx: Vec<LoopCtx>,
     /// The number of `switch` arms being emitted (which capture `break`).
@@ -83,6 +86,10 @@ struct LoopCtx {
     /// `switch_depth` outside the loop: a `break` inside a `switch` only
     /// leaves the `switch`.
     switch_depth: usize,
+    /// For a `do ... while`, its latch, whose branch is the loop's test.
+    latch: Option<Block>,
+    /// The `do ... while`'s condition and exit copies, once emitted.
+    test: Option<(Expr, Vec<Stmt>)>,
 }
 
 /// An edge copy: destination, plain source local, locals read.
@@ -132,6 +139,7 @@ pub fn emit(
         nested: HashSet::new(),
         use_blocks: HashMap::new(),
         loops: Default::default(),
+        layout: Default::default(),
         loop_ctx: Vec::new(),
         switch_depth: 0,
     };
@@ -167,8 +175,8 @@ impl Emitter<'_, '_> {
         }
 
         self.loops = std::rc::Rc::new(Loops::new(body, &order));
-        let items = self.loops.layout(&order, &self.nested);
-        self.items(&items, None)?;
+        self.layout = std::rc::Rc::new(self.loops.layout(body.entry, &order, &self.nested));
+        self.unit(body.entry, None)?;
 
         // Only keep labels that are jumped to.
         let gotos = std::mem::take(&mut self.gotos);
@@ -187,27 +195,65 @@ impl Emitter<'_, '_> {
         })
     }
 
-    /// Emit `items` in order. `next` is where control goes after the last.
-    fn items(&mut self, items: &[Item], next: Option<Block>) -> Result<()> {
-        for (i, item) in items.iter().enumerate() {
-            let n = items.get(i + 1).map(Item::entry).or(next);
-            match item {
-                Item::Block(b) => {
-                    self.out.push(Stmt::Label(label(*b)));
-                    self.block(*b, n)?;
-                }
-                Item::Loop(h, inner) => self.loop_item(*h, inner, n)?,
-            }
+    /// Emit `blocks` (laid out after something, see [`Loops::layout`]) in
+    /// order. `next` is where control goes after the last.
+    fn chain(&mut self, blocks: &[Block], next: Option<Block>) -> Result<()> {
+        for (i, &b) in blocks.iter().enumerate() {
+            self.unit(b, blocks.get(i + 1).copied().or(next))?;
         }
         Ok(())
     }
 
+    /// Emit block `b` where it's laid out: as a loop, if it's a loop's
+    /// header, else after a label.
+    fn unit(&mut self, b: Block, next: Option<Block>) -> Result<()> {
+        if self.loops.loops.contains_key(&b) {
+            return self.loop_item(b, next);
+        }
+        self.out.push(Stmt::Label(label(b)));
+        self.block(b, next)
+    }
+
     /// Emit block `b` (its instructions, then its terminator, which emits
-    /// the blocks nested in it). `next` is where control goes if it falls
-    /// off the end.
+    /// the blocks nested in it), then the blocks laid out after it. `next`
+    /// is where control goes if it falls off the end.
     fn block(&mut self, b: Block, next: Option<Block>) -> Result<()> {
+        let layout = self.layout.clone();
+        let after = layout.after(Anchor::Block(b));
         self.insts(b)?;
-        self.finish(b, next)
+        if self.loop_ctx.last().is_some_and(|c| c.latch == Some(b)) {
+            debug_assert!(after.is_empty());
+            return self.latch_test(b);
+        }
+        self.finish(b, after.first().copied().or(next))?;
+        self.chain(after, next)
+    }
+
+    /// Emit the terminator of a `do ... while`'s latch `b`: the back edge's
+    /// copies, then (in the loop context) the loop's condition and the exit
+    /// edge's copies.
+    fn latch_test(&mut self, b: Block) -> Result<()> {
+        let Terminator::CondBr {
+            cond,
+            if_true,
+            if_false,
+        } = &self.body.blocks[b].terminator
+        else {
+            unreachable!("checked by `do_while_latch`")
+        };
+        let back = self.loop_ctx.last().map(|c| c.header) == Some(if_true.block);
+        self.in_term = true;
+        let c = self.operand(Site::Term(b), TERM_COND, *cond)?;
+        let t = self.edge(b, 0, if_true)?;
+        let f = self.edge(b, 1, if_false)?;
+        self.record(&Stmt::If(c.clone(), t.clone(), f.clone()));
+        // The back edge's copies don't affect the condition or what the
+        // loop's exit reads (see `do_while_latch`).
+        let (copies, exit_copies, c) = if back { (t, f, c) } else { (f, t, negate(c)) };
+        self.out.extend(copies);
+        self.check_pending(b)?;
+        self.loop_ctx.last_mut().unwrap().test = Some((c, exit_copies));
+        Ok(())
     }
 
     /// Emit the instructions of block `b`.
@@ -257,54 +303,34 @@ impl Emitter<'_, '_> {
     /// for `while (1)`, its only exit or the exit to `next`. If that's
     /// nested (the loop is its only predecessor), it's emitted after the
     /// loop.
-    fn loop_item(&mut self, h: Block, items: &[Item], next: Option<Block>) -> Result<()> {
+    fn loop_item(&mut self, h: Block, next: Option<Block>) -> Result<()> {
         let body = self.body;
         let loops = self.loops.clone();
+        let layout = self.layout.clone();
         let l = &loops.loops[&h];
-        debug_assert!(matches!(items.first(), Some(Item::Block(b)) if *b == h));
-        let after_header = items.get(1).map(Item::entry).unwrap_or(h);
+        // The loop's body is its header's code and what follows it; then
+        // come the blocks laid out after the loop.
+        let after_h = layout.after(Anchor::Block(h));
+        let post = layout.after(Anchor::Loop(h));
+        let after_header = after_h.first().copied().unwrap_or(h);
+        let loop_next = post.first().copied().or(next);
 
-        let (follow, stmt, exit_copies) = if let Some((latch, back)) = self.do_while_latch(h, l, items) {
-            let Terminator::CondBr {
-                cond,
-                if_true,
-                if_false,
-            } = &body.blocks[latch].terminator
-            else {
-                unreachable!()
-            };
-            let exit = if back == 0 { if_false } else { if_true };
+        let (follow, stmt, exit_copies) = if let Some((latch, exit)) = self.do_while_latch(h, l) {
             self.loop_ctx.push(LoopCtx {
                 header: h,
-                follow: Some(exit.block),
+                follow: Some(exit),
                 do_while: true,
                 switch_depth: self.switch_depth,
+                latch: Some(latch),
+                test: None,
             });
             let saved = std::mem::take(&mut self.out);
-            let r = (|| -> Result<(Expr, Vec<Stmt>)> {
-                self.items(&items[..items.len() - 1], Some(latch))?;
-                self.out.push(Stmt::Label(label(latch)));
-                self.insts(latch)?;
-                self.in_term = true;
-                let c = self.operand(Site::Term(latch), TERM_COND, *cond)?;
-                let t = self.edge(latch, 0, if_true)?;
-                let f = self.edge(latch, 1, if_false)?;
-                self.record(&Stmt::If(c.clone(), t.clone(), f.clone()));
-                // The back edge's copies don't affect the condition or what
-                // the loop's exit reads (see `do_while_latch`).
-                let (copies, exit_copies, c) = if back == 0 {
-                    (t, f, c)
-                } else {
-                    (f, t, negate(c))
-                };
-                self.out.extend(copies);
-                self.check_pending(latch)?;
-                Ok((c, exit_copies))
-            })();
+            let r = self.block(h, Some(h));
             let stmts = std::mem::replace(&mut self.out, saved);
-            self.loop_ctx.pop();
-            let (c, exit_copies) = r?;
-            (Some(exit.block), Stmt::DoWhile(stmts, c), exit_copies)
+            let ctx = self.loop_ctx.pop().unwrap();
+            r?;
+            let (c, exit_copies) = ctx.test.expect("the latch is emitted");
+            (Some(exit), Stmt::DoWhile(stmts, c), exit_copies)
         } else {
             let saved = std::mem::take(&mut self.out);
             let r = self.insts(h);
@@ -319,16 +345,13 @@ impl Emitter<'_, '_> {
                     let inside = |b: Block| l.blocks.contains(&b);
                     // The exit's copies follow the loop, so no `break` may
                     // go there.
-                    let exit_ok = |t: &waffle::BlockTarget| {
-                        !self.has_copies(t) || self.only_exit(l, t.block)
-                    };
+                    let exit_ok =
+                        |t: &waffle::BlockTarget| !self.has_copies(t) || self.only_exit(l, t.block);
                     match (inside(if_true.block), inside(if_false.block)) {
                         (true, false) if exit_ok(if_false) => {
                             Some((*cond, if_true, if_false, false))
                         }
-                        (false, true) if exit_ok(if_true) => {
-                            Some((*cond, if_true, if_false, true))
-                        }
+                        (false, true) if exit_ok(if_true) => Some((*cond, if_true, if_false, true)),
                         _ => None,
                     }
                 }
@@ -358,12 +381,14 @@ impl Emitter<'_, '_> {
                     follow: Some(exit.block),
                     do_while: false,
                     switch_depth: self.switch_depth,
+                    latch: None,
+                    test: None,
                 });
                 let saved = std::mem::replace(&mut self.out, copies);
                 let r = (|| -> Result<()> {
                     let tail = self.tail(stay.block, Some(after_header))?;
                     self.out.extend(tail);
-                    self.items(&items[1..], Some(h))
+                    self.chain(after_h, Some(h))
                 })();
                 let stmts = std::mem::replace(&mut self.out, saved);
                 self.loop_ctx.pop();
@@ -380,21 +405,36 @@ impl Emitter<'_, '_> {
                         }
                     }
                 }
-                let follow = match exits.as_slice() {
-                    &[x] => Some(x),
-                    _ => next.filter(|n| exits.contains(n)),
+                // The only exit, else the exit to what follows the loop,
+                // else the only nested exit (which then follows the loop)
+                // that doesn't follow an enclosing loop already.
+                let nested_exits: Vec<Block> = exits
+                    .iter()
+                    .copied()
+                    .filter(|x| {
+                        self.nested.contains(x)
+                            && !self.loop_ctx.iter().any(|c| c.follow == Some(*x))
+                    })
+                    .collect();
+                let follow = match (exits.as_slice(), nested_exits.as_slice()) {
+                    (&[x], _) => Some(x),
+                    _ if loop_next.is_some_and(|n| exits.contains(&n)) => loop_next,
+                    (_, &[x]) => Some(x),
+                    _ => None,
                 };
                 self.loop_ctx.push(LoopCtx {
                     header: h,
                     follow,
                     do_while: false,
                     switch_depth: self.switch_depth,
+                    latch: None,
+                    test: None,
                 });
                 let saved = std::mem::replace(&mut self.out, vec![Stmt::Label(label(h))]);
                 self.out.extend(pre);
                 let r = (|| -> Result<()> {
                     self.finish(h, Some(after_header))?;
-                    self.items(&items[1..], Some(h))
+                    self.chain(after_h, Some(h))
                 })();
                 let stmts = std::mem::replace(&mut self.out, saved);
                 self.loop_ctx.pop();
@@ -407,32 +447,53 @@ impl Emitter<'_, '_> {
         match follow {
             Some(f) if self.nested.contains(&f) => {
                 self.out.push(Stmt::Label(label(f)));
-                self.block(f, next)?;
+                self.block(f, loop_next)?;
             }
             Some(f) => {
-                let tail = self.tail(f, next)?;
+                let tail = self.tail(f, loop_next)?;
                 self.out.extend(tail);
             }
             None => {}
         }
-        Ok(())
+        self.chain(post, next)
     }
 
-    /// If the loop `l` with header `h`, laid out as `items`, can be a `do
-    /// ... while`: its latch, and which of its targets is the back edge.
-    /// The loop must have a single back edge, from a conditional branch
-    /// that otherwise leaves the loop, at the end of its last block. If the
+    /// The block emitted last at the top level of the body of the loop with
+    /// header `h` (following what's laid out after each block), unless
+    /// that's a loop.
+    fn last_in_body(&self, h: Block) -> Option<Block> {
+        let mut b = h;
+        loop {
+            let after = if b != h && self.loops.loops.contains_key(&b) {
+                match self.layout.after(Anchor::Loop(b)) {
+                    [] => return None,
+                    after => after,
+                }
+            } else {
+                self.layout.after(Anchor::Block(b))
+            };
+            match after.last() {
+                Some(&m) => b = m,
+                None => return Some(b),
+            }
+        }
+    }
+
+    /// If the loop `l` with header `h` can be a `do ... while`: its latch,
+    /// and where the loop's exit goes. The loop must have a single back
+    /// edge, from a conditional branch that otherwise leaves the loop, at
+    /// the end of the block emitted last in its body. If the
     /// exit has copies, they follow the loop, so it must be the loop's only
     /// edge to its target. The back edge's copies are made before the
     /// condition is tested, so they mustn't affect it or the exit's copies,
     /// and the header's parameters (which they assign) mustn't be used
     /// outside the loop.
-    fn do_while_latch(&self, h: Block, l: &Loop, items: &[Item]) -> Option<(Block, usize)> {
+    fn do_while_latch(&self, h: Block, l: &Loop) -> Option<(Block, Block)> {
         let body = self.body;
         let &[latch] = l.latches.as_slice() else {
             return None;
         };
-        if !matches!(items.last(), Some(Item::Block(b)) if *b == latch) {
+        if self.last_in_body(h) != Some(latch) {
             return None;
         }
         let Terminator::CondBr {
@@ -443,10 +504,10 @@ impl Emitter<'_, '_> {
         else {
             return None;
         };
-        let (back, exit, i) = if if_true.block == h && !l.blocks.contains(&if_false.block) {
-            (if_true, if_false, 0)
+        let (back, exit) = if if_true.block == h && !l.blocks.contains(&if_false.block) {
+            (if_true, if_false)
         } else if if_false.block == h && !l.blocks.contains(&if_true.block) {
-            (if_false, if_true, 1)
+            (if_false, if_true)
         } else {
             return None;
         };
@@ -457,13 +518,11 @@ impl Emitter<'_, '_> {
             .args
             .iter()
             .zip(&body.blocks[h].params)
-            .filter(|&(&a, &(_, p))| {
-                self.names.contains_key(&p) && body.resolve_alias(a) != p
-            })
+            .filter(|&(&a, &(_, p))| self.names.contains_key(&p) && body.resolve_alias(a) != p)
             .map(|(_, &(_, p))| p)
             .collect();
         if dests.is_empty() {
-            return Some((latch, i));
+            return Some((latch, exit.block));
         }
         let outside = dests.iter().any(|p| {
             self.use_blocks
@@ -493,7 +552,7 @@ impl Emitter<'_, '_> {
                 stack.extend(args(body, v));
             }
         }
-        (!outside && !reads_dest).then_some((latch, i))
+        (!outside && !reads_dest).then_some((latch, exit.block))
     }
 
     /// Whether the loop `l` has only one edge to `b`.
@@ -509,9 +568,10 @@ impl Emitter<'_, '_> {
     /// Whether branch `t` assigns any of its block's parameters.
     fn has_copies(&self, t: &waffle::BlockTarget) -> bool {
         let params = &self.body.blocks[t.block].params;
-        t.args.iter().zip(params).any(|(&a, &(_, p))| {
-            self.names.contains_key(&p) && self.body.resolve_alias(a) != p
-        })
+        t.args
+            .iter()
+            .zip(params)
+            .any(|(&a, &(_, p))| self.names.contains_key(&p) && self.body.resolve_alias(a) != p)
     }
 
     /// The statements of nested block `b`, emitted inside the current
@@ -1876,11 +1936,7 @@ impl Emitter<'_, '_> {
                         }
                     }
                 };
-                let (c, t, f) = if swap {
-                    (negate(c), f, t)
-                } else {
-                    (c, t, f)
-                };
+                let (c, t, f) = if swap { (negate(c), f, t) } else { (c, t, f) };
                 if t.is_empty() {
                     // Both branches go to `next`.
                 } else if falls_through(&t) {

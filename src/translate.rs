@@ -239,6 +239,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                 stack_failures.insert(func, failure);
             }
             crate::prepare::simplify_params(body);
+            crate::prepare::thread_empty_blocks(body);
             crate::prepare::merge_blocks(body);
             crate::prepare::split_i64_moves(body);
             crate::prepare::split_splat_loads(body);

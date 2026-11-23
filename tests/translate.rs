@@ -81,6 +81,12 @@ fn loops() {
 }
 
 #[test]
+fn joins() {
+    insta::assert_snapshot!(translate_wat("joins.wat"));
+    check_compiles(&wat::parse_file(fixture("joins.wat")).unwrap(), "");
+}
+
+#[test]
 fn intrinsics() {
     insta::assert_snapshot!(translate_wat("intrinsics.wat"));
     check_compiles(&wat::parse_file(fixture("intrinsics.wat")).unwrap(), "");

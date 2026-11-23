@@ -1,5 +1,8 @@
-//! Natural loops of a function body, and a layout of its blocks that keeps
-//! each loop's blocks together (so that it can be emitted as a QuakeC loop).
+//! Natural loops of a function body, and a layout of its blocks: each
+//! block with several predecessors follows its immediate dominator (as in
+//! Ramsey's "Beyond Relooper"), so that branches to it from the ends of its
+//! dominator's branches fall through, and each loop's blocks are together
+//! (so that it can be emitted as a QuakeC loop).
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,21 +27,28 @@ pub struct Loops {
     pub loops: HashMap<Block, Loop>,
     /// The header of the innermost loop containing each block in a loop.
     innermost: HashMap<Block, Block>,
+    /// The immediate dominator of each reachable block but the entry.
+    idom: HashMap<Block, Block>,
 }
 
-/// The layout of the blocks emitted at one level: blocks, and loops (whose
-/// items start with their header).
-pub enum Item {
+/// Where a block is emitted: after a block's code (and the blocks after it),
+/// or after a loop statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Anchor {
     Block(Block),
-    Loop(Block, Vec<Item>),
+    Loop(Block),
 }
 
-impl Item {
-    /// Where control goes on entering this item.
-    pub fn entry(&self) -> Block {
-        match self {
-            Item::Block(b) | Item::Loop(b, _) => *b,
-        }
+/// Which blocks are emitted after each anchor, in order (see
+/// [`Loops::layout`]).
+#[derive(Default)]
+pub struct Layout {
+    after: HashMap<Anchor, Vec<Block>>,
+}
+
+impl Layout {
+    pub fn after(&self, a: Anchor) -> &[Block] {
+        self.after.get(&a).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -49,6 +59,11 @@ impl Loops {
     pub fn new(body: &FunctionBody, order: &[Block]) -> Loops {
         let cfg = CFGInfo::new(body);
         let pos: HashMap<Block, usize> = order.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+        let idom: HashMap<Block, Block> = order
+            .iter()
+            .filter(|&&b| b != body.entry)
+            .map(|&b| (b, cfg.domtree[b]))
+            .collect();
         let mut latches: Vec<(Block, Vec<Block>)> = Vec::new();
         for &b in order {
             for t in targets(&body.blocks[b].terminator) {
@@ -58,7 +73,10 @@ impl Loops {
                 }
                 // A retreating edge: in a reducible CFG, a back edge.
                 if !cfg.dominates(h, b) {
-                    return Loops::default();
+                    return Loops {
+                        idom,
+                        ..Loops::default()
+                    };
                 }
                 match latches.iter_mut().find(|(x, _)| *x == h) {
                     Some((_, ls)) if ls.contains(&b) => {}
@@ -73,12 +91,7 @@ impl Loops {
             let mut stack: Vec<Block> = ls.clone();
             while let Some(x) = stack.pop() {
                 if blocks.insert(x) {
-                    stack.extend(
-                        cfg.preds[x]
-                            .iter()
-                            .copied()
-                            .filter(|p| pos.contains_key(p)),
-                    );
+                    stack.extend(cfg.preds[x].iter().copied().filter(|p| pos.contains_key(p)));
                 }
             }
             loops.insert(
@@ -117,7 +130,11 @@ impl Loops {
         for (h, p) in parents {
             loops.get_mut(&h).unwrap().parent = p;
         }
-        Loops { loops, innermost }
+        Loops {
+            loops,
+            innermost,
+            idom,
+        }
     }
 
     /// The header of the innermost loop containing `b`.
@@ -125,33 +142,32 @@ impl Loops {
         self.innermost.get(&b).copied()
     }
 
-    /// The layout of `order`'s blocks, except those in `nested` (which are
-    /// emitted inside their predecessor): in reverse postorder, but with
-    /// each loop's blocks together, where its header is. In a reducible CFG,
-    /// every edge into a loop then comes from an earlier item (to its
-    /// header), and every edge out of it goes to a later one.
-    pub fn layout(&self, order: &[Block], nested: &HashSet<Block>) -> Vec<Item> {
-        self.region(order, None, nested)
-    }
-
-    fn region(&self, blocks: &[Block], current: Option<Block>, nested: &HashSet<Block>) -> Vec<Item> {
-        let mut items = Vec::new();
-        for &b in blocks {
-            if self.innermost(b) == current {
-                if !nested.contains(&b) {
-                    items.push(Item::Block(b));
-                }
-            } else if let Some(l) = self.loops.get(&b)
-                && l.parent == current
-            {
-                let inner: Vec<Block> = blocks
-                    .iter()
-                    .copied()
-                    .filter(|x| l.blocks.contains(x))
-                    .collect();
-                items.push(Item::Loop(b, self.region(&inner, Some(b), nested)));
+    /// The layout of `order`'s blocks (in reverse postorder), except the
+    /// entry and those in `nested` (which are emitted inside their only
+    /// predecessor). Each follows its immediate dominator's code, unless
+    /// that's in a loop the block isn't in: then it follows the outermost
+    /// such loop's statement. Every path to a block passes through its
+    /// dominator, so this is where its predecessors are; a loop's blocks
+    /// are all dominated by its header, so they're inside the loop.
+    pub fn layout(&self, entry: Block, order: &[Block], nested: &HashSet<Block>) -> Layout {
+        let mut after: HashMap<Anchor, Vec<Block>> = HashMap::new();
+        for &m in order {
+            if m == entry || nested.contains(&m) {
+                continue;
             }
+            let mut a = Anchor::Block(self.idom[&m]);
+            loop {
+                let l = match a {
+                    Anchor::Block(b) => self.innermost(b),
+                    Anchor::Loop(h) => self.loops[&h].parent,
+                };
+                match l {
+                    Some(h) if !self.loops[&h].blocks.contains(&m) => a = Anchor::Loop(h),
+                    _ => break,
+                }
+            }
+            after.entry(a).or_default().push(m);
         }
-        items
+        Layout { after }
     }
 }

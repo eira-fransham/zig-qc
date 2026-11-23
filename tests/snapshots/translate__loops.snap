@@ -103,13 +103,13 @@ float switch_loop(float p0) {
             break;
         default:
             if ((l2 > 9)) {
-                goto b2;
+                goto b1;
             }
             l0 = l2;
             l1 = (l1 + 100);
         }
     }
-b2:
+b1:
     return l1;
 }
 

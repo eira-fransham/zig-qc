@@ -309,7 +309,15 @@ fn fixture_control_flow() {
     for (x, r) in [(0.0, 10.0), (1.0, 20.0), (2.0, 30.0), (7.0, 30.0)] {
         check("classify", &[x], r);
     }
-    for (x, r) in [(0, 0.5), (1, 20.5), (2, 2.5), (3, 30.5), (4, 20.5), (5, 30.5), (9, 30.5)] {
+    for (x, r) in [
+        (0, 0.5),
+        (1, 20.5),
+        (2, 2.5),
+        (3, 30.5),
+        (4, 20.5),
+        (5, 30.5),
+        (9, 30.5),
+    ] {
         check("table_join", &[x as f32], r);
     }
     for (x, r) in [(-1.0, 1.0), (5.0, 2.0), (11.0, 12.0)] {
@@ -392,6 +400,49 @@ fn fixture_loops() {
     }
     for (n, r) in [(0.0, 0.0), (1.0, 1.0), (16.0, 4.0), (17.0, -1.0)] {
         check("find_root", &[n], r);
+    }
+}
+
+/// `tests/fixtures/joins.wat`: blocks with several predecessors, laid out
+/// after their immediate dominator. Checked against these reimplementations.
+#[test]
+fn fixture_joins() {
+    let Some(progs) = fixture_progs("joins.wat") else {
+        return;
+    };
+    let check = |func, args: &[f32], expected| check_in(&progs, func, args, None, expected);
+    let join_in_branch = |a: i32, b: i32, c: i32| {
+        if a == 0 {
+            return 0;
+        }
+        let mut r = 1;
+        if b != 0 {
+            r += 10;
+            if c > 5 {
+                return 0;
+            }
+        }
+        r * 3
+    };
+    for a in [0, 1] {
+        for b in [0, 1] {
+            for c in [0, 9] {
+                let args = [a as f32, b as f32, c as f32];
+                check("join_in_branch", &args, join_in_branch(a, b, c) as f32);
+            }
+        }
+    }
+    // `g` counts the times the shared tail runs (once per call).
+    for (x, r) in [(0.0, 101.0), (1.0, 201.0), (2.0, 301.0), (3.0, 0.0)] {
+        check("skip_tail", &[x], r);
+    }
+    for a in [0, 11] {
+        for b in [0, 1] {
+            for c in [0, 9] {
+                let r = a > 10 || (b != 0 && c < 5);
+                check("and_or", &[a as f32, b as f32, c as f32], r as i32 as f32);
+            }
+        }
     }
 }
 
