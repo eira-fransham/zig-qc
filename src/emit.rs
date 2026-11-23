@@ -445,6 +445,7 @@ impl Emitter<'_, '_> {
         }
         let addr = c.wrapping_add(bias);
         match k {
+            Kind::StackOffset => bail!("internal error: an unreified shadow stack address"),
             Kind::Float => {
                 if c.unsigned_abs() > MAX_EXACT_INT as u64 {
                     self.ctx.warnings.push(format!(

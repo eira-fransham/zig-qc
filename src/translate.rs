@@ -141,9 +141,10 @@ pub struct Ctx<'m> {
     /// Accessors needed for dynamic loads of pointers (string literals or
     /// functions) from static data, by the type loaded.
     pub pointer_accessors: BTreeSet<QcType>,
-    /// The imported `__stack_pointer` global, if any. Using it is an error;
-    /// importing it without using it is fine.
+    /// The imported `__stack_pointer` global, if any. Functions' uses of it
+    /// are reified (see `stack.rs`), except those in `stack_failures`.
     pub stack_pointer: Option<Global>,
+    pub stack_failures: HashMap<Func, crate::stack::StackFailure>,
     /// Functions in `__indirect_function_table`, by index.
     pub table_funcs: HashMap<u64, Func>,
     /// Globals and fields declared by the module (by name, see
@@ -225,8 +226,18 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
     module
         .expand_all_funcs()
         .context("failed to parse wasm functions")?;
-    for (_, f) in module.funcs.entries_mut() {
+    let stack_pointer = module.imports.iter().find_map(|i| match i.kind {
+        ImportKind::Global(g) if i.module == ENV_MODULE && i.name == "__stack_pointer" => Some(g),
+        _ => None,
+    });
+    let mut stack_failures = HashMap::new();
+    for (func, f) in module.funcs.entries_mut() {
         if let Some(body) = f.body_mut() {
+            if let Some(sp) = stack_pointer
+                && let Err(failure) = crate::stack::reify(body, sp)
+            {
+                stack_failures.insert(func, failure);
+            }
             crate::prepare::simplify_params(body);
             crate::prepare::merge_blocks(body);
             crate::prepare::float_sign_tests(body);
@@ -268,6 +279,7 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
         data_accessors: BTreeSet::new(),
         pointer_accessors: BTreeSet::new(),
         stack_pointer: None,
+        stack_failures,
         table_funcs: HashMap::new(),
         user_globals: BTreeMap::new(),
         user_fields: BTreeMap::new(),
@@ -295,8 +307,8 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
                 );
             }
             // Static data and function pointers are placed at fixed bases
-            // (see `prepare.rs`). wasm-ld may import `__stack_pointer` even
-            // if nothing uses it; uses are rejected during inference.
+            // (see `prepare.rs`). `__stack_pointer` is handled by
+            // `stack.rs`.
             ImportKind::Global(g) => {
                 imported_globals.push(g);
                 match (import.module.as_str(), import.name.as_str()) {

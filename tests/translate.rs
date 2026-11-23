@@ -348,15 +348,59 @@ fn global_address_errors() {
 }
 
 #[test]
-fn stack_pointer_use_is_an_error() {
-    let err = translate_err(
-        r#"(module (import "env" "__stack_pointer" (global $sp (mut i32)))
-            (func (export "f") (global.set $sp (i32.sub (global.get $sp) (i32.const 16)))))"#,
-    );
-    assert!(
-        err.contains("uses the shadow stack (`__stack_pointer`)"),
-        "{err}"
-    );
+fn stack() {
+    insta::assert_snapshot!(translate_wat("stack.wat"));
+    check_compiles(&wat::parse_file(fixture("stack.wat")).unwrap(), "");
+}
+
+/// A function with a 16-byte stack frame at `$fp`, running `body`.
+fn stack_err(body: &str) -> String {
+    translate_err(&format!(
+        r#"(module (import "env" "memory" (memory 1))
+            (import "env" "__stack_pointer" (global $sp (mut i32)))
+            (func $g (param i32))
+            (func (export "f") (param $x f32) (param $i i32) (result f32)
+              (local $fp i32)
+              (global.set $sp (local.tee $fp (i32.sub (global.get $sp) (i32.const 16))))
+              {body}
+              (global.set $sp (i32.add (local.get $fp) (i32.const 16)))
+              (f32.const 0)))"#
+    ))
+}
+
+#[test]
+fn stack_errors() {
+    let cases = [
+        (
+            "(call $g (local.get $fp))",
+            "the address of a local is passed to a function",
+        ),
+        (
+            "(f32.store (i32.add (local.get $fp) (i32.shl (local.get $i) (i32.const 2))) (local.get $x))",
+            "non-constant offset",
+        ),
+        (
+            "(i64.store (local.get $fp) (i64.const 1)) (drop (i32.load offset=4 (local.get $fp)))",
+            "overlap",
+        ),
+        (
+            "(f32.store (local.get $fp) (local.get $x)) (drop (i32.load (local.get $fp)))",
+            "accessed as both f32 and i32",
+        ),
+        (
+            "(i32.store8 (local.get $fp) (local.get $i)) (drop (i32.load8_s (local.get $fp)))",
+            "sign-extending load",
+        ),
+        (
+            "(i32.store offset=4 (local.get $fp) (local.get $fp))",
+            "stored in memory",
+        ),
+    ];
+    for (body, msg) in cases {
+        let err = stack_err(body);
+        assert!(err.contains("uses the shadow stack"), "{body}: {err}");
+        assert!(err.contains(msg), "{body}: expected {msg:?} in {err}");
+    }
 }
 
 #[test]

@@ -53,6 +53,9 @@ pub enum Kind {
     Func,
     /// A field reference, `.T`.
     Field(QcType),
+    /// A shadow stack address that couldn't be reified (see `stack.rs`):
+    /// an error wherever it is used.
+    StackOffset,
 }
 
 impl Kind {
@@ -64,6 +67,7 @@ impl Kind {
             Kind::String => QcType::String,
             Kind::Func => QcType::Func,
             Kind::Field(t) => t.field_of().expect("fields have value types"),
+            Kind::StackOffset => QcType::StackOffset(0),
         }
     }
 
@@ -79,6 +83,7 @@ impl Kind {
             QcType::EntityField => Kind::Field(QcType::Entity),
             QcType::StringField => Kind::Field(QcType::String),
             QcType::FuncField => Kind::Field(QcType::Func),
+            QcType::StackOffset(_) => Kind::StackOffset,
             QcType::Void => return None,
         })
     }
@@ -181,6 +186,8 @@ impl Uf {
         match &c.kind {
             None => c.kind = Some((k, why.to_string())),
             Some((old, _)) if *old == k => {}
+            Some((Kind::StackOffset, reason)) => bail!("{}", stack_error(reason)),
+            Some(_) if k == Kind::StackOffset => bail!("{}", stack_error(why)),
             Some((old, old_why)) => {
                 bail!("type conflict: a value is used as {old} ({old_why}) and as {k} ({why})")
             }
@@ -251,6 +258,14 @@ impl Uf {
         let (r, p) = self.find(v);
         self.set_anchor(r, p, why)
     }
+}
+
+/// The error for a use of the shadow stack that couldn't be reified.
+fn stack_error(reason: &str) -> String {
+    format!(
+        "this function uses the shadow stack (`__stack_pointer`) in a way that can't be \
+         converted: {reason}"
+    )
 }
 
 /// Per-function inference state.
@@ -405,6 +420,10 @@ impl Infer {
                 let name = &ctx.funcs[&f].name;
                 inf.constrain(ctx, f)
                     .map_err(|e| e.context(format!("while inferring types in `{name}`")))?;
+                // Stack values that nothing else constrained.
+                if let Some(failure) = ctx.stack_failures.get(&f) {
+                    bail!("in `{name}`: {}", stack_error(&failure.reason));
+                }
             }
             let mut q = Vec::new();
             for &f in &scc {
@@ -448,6 +467,13 @@ impl Infer {
                         }
                         _ => bail!("multi-value results are not supported (in block {block})"),
                     }
+                }
+            }
+        }
+        if let Some(failure) = ctx.stack_failures.get(&f) {
+            for v in &failure.values {
+                if let Some(&var) = vals.get(v) {
+                    self.uf.typed(var, Kind::StackOffset, &failure.reason)?;
                 }
             }
         }
@@ -576,15 +602,14 @@ impl Infer {
                 self.uf.union(r, x, 0, &why("a select"))?;
                 self.uf.union(r, y, 0, &why("a select"))?;
             }
-            O::GlobalGet { global_index } | O::GlobalSet { global_index }
-                if Some(*global_index) == ctx.stack_pointer =>
-            {
-                bail!(
-                    "this function uses the shadow stack (`__stack_pointer`), which QuakeC can't \
-                     support. Usually a struct was passed by reference or a local's address was \
-                     taken; pass `Entity`, `String` and `Vector` values by value instead"
-                )
+            // Functions whose stack use was reified no longer use the stack
+            // pointer; in the others its values are typed `StackOffset`
+            // (see `declare`).
+            O::GlobalGet { global_index } if Some(*global_index) == ctx.stack_pointer => {
+                let reason = ctx.stack_failures.get(&f).map_or("", |s| s.reason.as_str());
+                self.uf.typed(res.unwrap(), Kind::StackOffset, reason)?;
             }
+            O::GlobalSet { global_index } if Some(*global_index) == ctx.stack_pointer => {}
             O::GlobalGet { global_index } => {
                 let g = self.globals[global_index];
                 self.uf.union(res.unwrap(), g, 0, &why("a wasm global"))?;

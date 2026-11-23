@@ -246,3 +246,66 @@ pub export fn call_through_field(e: Entity) Entity {
     f(e, 2);
     return e;
 }
+
+// ---- the shadow stack: volatile locals live in memory ----
+
+/// Two volatile locals.
+pub export fn volatile_sum(a: f32, b: f32) f32 {
+    var x: f32 = a;
+    var y: f32 = b;
+    const px: *volatile f32 = &x;
+    const py: *volatile f32 = &y;
+    px.* += 1;
+    return px.* + py.*;
+}
+
+/// A volatile counter, read and written around a loop.
+pub export fn volatile_counter(n: f32) f32 {
+    var i: f32 = 0;
+    const p: *volatile f32 = &i;
+    while (p.* < n) p.* += 1;
+    return p.*;
+}
+
+/// A store through a pointer to one of two locals.
+pub export fn volatile_pick(c: f32, a: f32, b: f32) f32 {
+    var x: f32 = a;
+    var y: f32 = b;
+    const px: *volatile f32 = &x;
+    const py: *volatile f32 = &y;
+    const p: *volatile f32 = if (c != 0) px else py;
+    p.* = 10;
+    return px.* + 2 * py.*;
+}
+
+/// A volatile entity.
+pub export fn volatile_entity(e: Entity) f32 {
+    var l: Entity = e;
+    const p: *volatile Entity = &l;
+    return p.*.get(.health);
+}
+
+/// A volatile vector.
+pub export fn volatile_vector(v: Vector) Vector {
+    var l: Vector = v;
+    const p: *volatile Vector = &l;
+    p.* = p.* + @as(Vector, @splat(1));
+    return p.*;
+}
+
+/// A volatile `bool`.
+pub export fn volatile_flag(c: f32) f32 {
+    var f: bool = c > 0;
+    const p: *volatile bool = &f;
+    return if (p.*) 1 else 0;
+}
+
+/// A volatile local and a call (of the recursive `fibRec`, which can't be
+/// inlined): the frame is allocated by moving `__stack_pointer`, and
+/// restored.
+pub export fn stack_frame_call(x: f32) f32 {
+    var l: f32 = x;
+    const p: *volatile f32 = &l;
+    p.* = fibRec(@intFromFloat(p.*));
+    return p.* + 1;
+}

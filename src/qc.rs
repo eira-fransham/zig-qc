@@ -19,6 +19,10 @@ pub enum QcType {
     EntityField,
     StringField,
     FuncField,
+    /// An address in the shadow stack, at this offset from
+    /// `__stack_pointer` on entry (see `stack.rs`). Never emitted: stack
+    /// values are reified or rejected.
+    StackOffset(i32),
 }
 
 impl QcType {
@@ -35,6 +39,7 @@ impl QcType {
             QcType::EntityField => ".entity",
             QcType::StringField => ".string",
             QcType::FuncField => ".void()",
+            QcType::StackOffset(_) => "stack offset",
         }
     }
 

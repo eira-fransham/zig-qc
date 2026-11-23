@@ -7,6 +7,7 @@ pub mod emit;
 pub mod infer;
 pub mod prepare;
 pub mod qc;
+pub mod stack;
 pub mod sysdefs;
 pub mod translate;
 

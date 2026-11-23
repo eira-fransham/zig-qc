@@ -511,3 +511,56 @@ fn fixture_llvm_idioms() {
         assert_eq!(field(&e, "health"), &json!(2.0), "{f}");
     }
 }
+
+// ---- the shadow stack ----
+
+/// Volatile locals, which LLVM keeps in the shadow stack: each slot of the
+/// frame becomes a value.
+#[test]
+fn stack_locals() {
+    let Some(v) = call("volatile_sum", &["2", "3"]) else {
+        return;
+    };
+    assert_eq!(v, json!(6.0));
+    // Around a loop.
+    assert_eq!(call("volatile_counter", &["4.5"]).unwrap(), json!(5.0));
+    assert_eq!(call("volatile_counter", &["-1"]).unwrap(), json!(0.0));
+    // A store through a pointer to one of two locals: `x + 2 * y`.
+    assert_eq!(
+        call("volatile_pick", &["1", "2", "3"]).unwrap(),
+        json!(16.0)
+    );
+    assert_eq!(
+        call("volatile_pick", &["0", "2", "3"]).unwrap(),
+        json!(22.0)
+    );
+    // Entity, vector and `bool` locals.
+    assert_eq!(
+        call("volatile_entity", &[r#"{"health": 42}"#]).unwrap(),
+        json!(42.0)
+    );
+    assert_eq!(
+        call("volatile_vector", &["[1, 2, 3]"]).unwrap(),
+        json!([2.0, 3.0, 4.0])
+    );
+    assert_eq!(call("volatile_flag", &["1"]).unwrap(), json!(1.0));
+    assert_eq!(call("volatile_flag", &["-1"]).unwrap(), json!(0.0));
+    // A frame around a call: `fib(10) + 1`.
+    assert_eq!(call("stack_frame_call", &["10"]).unwrap(), json!(56.0));
+}
+
+/// `tests/fixtures/stack.wat`.
+#[test]
+fn fixture_stack() {
+    let Some(progs) = fixture_progs("stack.wat") else {
+        return;
+    };
+    let call = |func, args: &[&str]| run(&progs, func, args, None, false);
+    assert_eq!(call("sum", &["2", "3"]), json!(6.0));
+    assert_eq!(call("uninit", &[]), json!(3.0));
+    assert_eq!(call("count", &["3"]), json!(3.0));
+    assert_eq!(call("choose", &["1", "2", "3"]), json!(2.0));
+    assert_eq!(call("choose", &["0", "2", "3"]), json!(3.0));
+    assert_eq!(call("read_nextthink", &[r#"{"nextthink": 7}"#]), json!(7.0));
+    assert_eq!(call("empty_frame", &["4"]), json!(8.0));
+}

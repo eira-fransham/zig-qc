@@ -450,33 +450,93 @@ pub fn float_sign_tests(body: &mut waffle::FunctionBody) {
         return;
     }
     // Remove the reinterpretations (and xors of them) now unused.
-    loop {
-        let mut uses: std::collections::HashMap<Value, usize> = Default::default();
-        for (_, def) in body.blocks.entries() {
-            for &v in &def.insts {
-                if let ValueDef::Operator(_, args, _) = &body.values[v] {
-                    for &a in &body.arg_pool[*args] {
-                        *uses.entry(body.resolve_alias(a)).or_default() += 1;
-                    }
-                }
+    remove_dead(body, |op| matches!(op, O::I32ReinterpretF32 | O::I32Xor));
+}
+
+/// Remove the instructions with an operator `pure` accepts whose results
+/// are unused, and the block parameters that are only passed on to unused
+/// parameters (including round a loop).
+pub fn remove_dead(body: &mut waffle::FunctionBody, pure: impl Fn(&waffle::Operator) -> bool) {
+    use waffle::{Value, ValueDef};
+    let dead_op = |body: &waffle::FunctionBody, v: Value| matches!(&body.values[v], ValueDef::Operator(op, _, _) if pure(op));
+    // Mark the live values, from the uses by everything else.
+    let mut live: std::collections::HashSet<Value> = Default::default();
+    let mut work: Vec<Value> = Vec::new();
+    let mark = |v: Value, live: &mut std::collections::HashSet<Value>, work: &mut Vec<Value>| {
+        let v = body.resolve_alias(v);
+        if live.insert(v) {
+            work.push(v);
+        }
+    };
+    // Incoming branch arguments of each parameter.
+    let mut incoming: std::collections::HashMap<Value, Vec<Value>> = Default::default();
+    for (_, def) in body.blocks.entries() {
+        for &v in &def.insts {
+            if !dead_op(body, v) {
+                mark(v, &mut live, &mut work);
             }
-            def.terminator
-                .visit_uses(|a| *uses.entry(body.resolve_alias(a)).or_default() += 1);
         }
-        let mut removed = false;
+        let mut cond_uses = Vec::new();
+        match &def.terminator {
+            waffle::Terminator::CondBr { cond, .. } => cond_uses.push(*cond),
+            waffle::Terminator::Select { value, .. } => cond_uses.push(*value),
+            waffle::Terminator::Return { values } => cond_uses.extend(values.iter().copied()),
+            _ => {}
+        }
+        for v in cond_uses {
+            mark(v, &mut live, &mut work);
+        }
+        def.terminator.visit_targets(|t| {
+            for (&a, &(_, p)) in t.args.iter().zip(&body.blocks[t.block].params) {
+                incoming.entry(p).or_default().push(a);
+            }
+        });
+    }
+    // The entry block's parameters are the function's.
+    for &(_, p) in &body.blocks[body.entry].params {
+        mark(p, &mut live, &mut work);
+    }
+    while let Some(v) = work.pop() {
+        if let ValueDef::Operator(_, args, _) = &body.values[v] {
+            for &a in &body.arg_pool[*args] {
+                mark(a, &mut live, &mut work);
+            }
+        }
+        for &a in incoming.get(&v).into_iter().flatten() {
+            mark(a, &mut live, &mut work);
+        }
+    }
+    // Sweep.
+    for (_, def) in body.blocks.entries_mut() {
+        def.insts.retain(|&v| live.contains(&v));
+    }
+    let blocks: Vec<_> = body.blocks.iter().filter(|&b| b != body.entry).collect();
+    for b in blocks {
+        let keep: Vec<bool> = body.blocks[b]
+            .params
+            .iter()
+            .map(|(_, p)| live.contains(p))
+            .collect();
+        if keep.iter().all(|&k| k) {
+            continue;
+        }
+        let params = std::mem::take(&mut body.blocks[b].params);
+        body.blocks[b].params = params
+            .into_iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .map(|(p, _)| p)
+            .collect();
+        for (j, &(ty, v)) in body.blocks[b].params.iter().enumerate() {
+            body.values[v] = ValueDef::BlockParam(b, j as u32, ty);
+        }
         for (_, def) in body.blocks.entries_mut() {
-            def.insts.retain(|&v| {
-                let dead = !uses.contains_key(&v)
-                    && matches!(
-                        body.values[v],
-                        ValueDef::Operator(O::I32ReinterpretF32 | O::I32Xor, _, _)
-                    );
-                removed |= dead;
-                !dead
+            def.terminator.update_targets(|t| {
+                if t.block == b {
+                    let mut k = keep.iter();
+                    t.args.retain(|_| *k.next().unwrap());
+                }
             });
-        }
-        if !removed {
-            break;
         }
     }
 }
