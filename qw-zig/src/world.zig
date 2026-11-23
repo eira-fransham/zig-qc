@@ -148,7 +148,7 @@ pub export fn worldspawn() void {
 
     // custom map attributes
 
-    if (self.get(.model).eql(S("maps/e1m8.bsp"))) {
+    if (self.model.eql(S("maps/e1m8.bsp"))) {
         q.cvar_set(S("sv_gravity"), S("100"));
     } else {
         q.cvar_set(S("sv_gravity"), S("800"));
@@ -340,29 +340,29 @@ pub export fn bodyque() void {
 pub fn InitBodyQue() callconv(.c) void {
     const head = q.spawn();
     bodyque_head.set(head);
-    head.set(.classname, S("bodyque"));
-    head.set(.owner, q.spawn());
-    head.get(.owner).set(.classname, S("bodyque"));
-    head.get(.owner).set(.owner, q.spawn());
-    head.get(.owner).get(.owner).set(.classname, S("bodyque"));
-    head.get(.owner).get(.owner).set(.owner, q.spawn());
-    head.get(.owner).get(.owner).get(.owner).set(.classname, S("bodyque"));
-    head.get(.owner).get(.owner).get(.owner).set(.owner, head);
+    head.classname = S("bodyque");
+    head.owner = q.spawn();
+    head.owner.classname = S("bodyque");
+    head.owner.owner = q.spawn();
+    head.owner.owner.classname = S("bodyque");
+    head.owner.owner.owner = q.spawn();
+    head.owner.owner.owner.classname = S("bodyque");
+    head.owner.owner.owner.owner = head;
 }
 
 /// make a body que entry for the given ent so the ent can be
 /// respawned elsewhere
 pub fn CopyToBodyQue(ent: Entity) callconv(.c) void {
     const head = bodyque_head.get();
-    head.set(.angles, ent.get(.angles));
-    head.set(.model, ent.get(.model));
-    head.set(.modelindex, ent.get(.modelindex));
-    head.set(.frame, ent.get(.frame));
-    head.set(.colormap, ent.get(.colormap));
-    head.set(.movetype, ent.get(.movetype));
-    head.set(.velocity, ent.get(.velocity));
-    head.set(.flags, 0);
-    q.setorigin(head, ent.get(.origin));
-    q.setsize(head, ent.get(.mins), ent.get(.maxs));
-    bodyque_head.set(head.get(.owner));
+    head.angles = ent.angles;
+    head.model = ent.model;
+    head.modelindex = ent.modelindex;
+    head.frame = ent.frame;
+    head.colormap = ent.colormap;
+    head.movetype = ent.movetype;
+    head.velocity = ent.velocity;
+    head.flags = 0;
+    q.setorigin(head, ent.origin);
+    q.setsize(head, ent.mins, ent.maxs);
+    bodyque_head.set(head.owner);
 }

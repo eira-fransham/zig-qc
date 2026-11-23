@@ -540,3 +540,332 @@ pub fn remove_dead(body: &mut waffle::FunctionBody, pure: impl Fn(&waffle::Opera
         }
     }
 }
+
+/// Split 64-bit memory moves into pairs of 32-bit ones. LLVM merges two
+/// adjacent 4-byte copies or constant stores (e.g. of two entity fields)
+/// into one `i64` access, but QuakeC has no 64-bit values:
+/// - `i64.store(p, k)` of a constant becomes `i32.store`s of its halves;
+/// - an `i64.load` only used as the value of `i64.store`s becomes two
+///   `i32.load`s (in its place), and each store two `i32.store`s of them.
+///
+/// Other `i64` values are left alone, and rejected later.
+pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
+    use waffle::{MemoryArg, Operator as O, Type, Value, ValueDef};
+    let op_of = |body: &waffle::FunctionBody, v: Value| match &body.values[body.resolve_alias(v)] {
+        ValueDef::Operator(op, args, _) => Some((*op, body.arg_pool[*args].to_vec())),
+        _ => None,
+    };
+    // `i64.load`s whose every use is as a stored value.
+    let mut uses: std::collections::HashMap<Value, bool> = Default::default();
+    let mut used = |v: Value, as_value: bool| {
+        let ok = uses.entry(body.resolve_alias(v)).or_insert(true);
+        *ok &= as_value;
+    };
+    for (_, def) in body.blocks.entries() {
+        for &v in &def.insts {
+            if let Some((op, args)) = op_of(body, v) {
+                for (i, &a) in args.iter().enumerate() {
+                    used(a, matches!(op, O::I64Store { .. }) && i == 1);
+                }
+            }
+        }
+        def.terminator.visit_uses(|v| used(v, false));
+    }
+    let halves = |m: MemoryArg| {
+        let align = m.align.min(2);
+        [
+            MemoryArg { align, ..m },
+            MemoryArg {
+                align,
+                offset: m.offset + 4,
+                ..m
+            },
+        ]
+    };
+    let i32_ty = body.single_type_list(Type::I32);
+    let blocks: Vec<_> = body.blocks.iter().collect();
+    // Each split load's halves.
+    let mut split: std::collections::HashMap<Value, [Value; 2]> = Default::default();
+    // The loads, then the stores (which may be in blocks before them).
+    let phases = [false, true].into_iter();
+    for (stores, b) in phases.flat_map(|s| blocks.iter().map(move |&b| (s, b))) {
+        let insts = std::mem::take(&mut body.blocks[b].insts);
+        let mut out = Vec::with_capacity(insts.len());
+        for v in insts {
+            let Some((op, args)) = op_of(body, v) else {
+                out.push(v);
+                continue;
+            };
+            match op {
+                O::I64Load { memory } if !stores && uses.get(&v) == Some(&true) => {
+                    let pair = halves(memory).map(|memory| {
+                        let a = body.arg_pool.from_iter([args[0]].into_iter());
+                        let l =
+                            body.add_value(ValueDef::Operator(O::I32Load { memory }, a, i32_ty));
+                        out.push(l);
+                        l
+                    });
+                    split.insert(v, pair);
+                }
+                O::I64Store { memory } if stores => {
+                    let x = body.resolve_alias(args[1]);
+                    let values = if let Some(&pair) = split.get(&x) {
+                        pair
+                    } else if let Some((O::I64Const { value }, _)) = op_of(body, x) {
+                        [value as u32, (value >> 32) as u32].map(|value| {
+                            let k = body.add_value(ValueDef::Operator(
+                                O::I32Const { value },
+                                Default::default(),
+                                i32_ty,
+                            ));
+                            out.push(k);
+                            k
+                        })
+                    } else {
+                        out.push(v);
+                        continue;
+                    };
+                    let ValueDef::Operator(_, _, tys) = body.values[v] else {
+                        unreachable!()
+                    };
+                    for (memory, x) in halves(memory).into_iter().zip(values) {
+                        let a = body.arg_pool.from_iter([args[0], x].into_iter());
+                        out.push(body.add_value(ValueDef::Operator(
+                            O::I32Store { memory },
+                            a,
+                            tys,
+                        )));
+                    }
+                }
+                _ => out.push(v),
+            }
+        }
+        body.blocks[b].insts = out;
+    }
+}
+
+/// Rewrite `v128.load32_splat(p)` (LLVM's load of one value into every
+/// lane) into `f32x4.splat(f32.load(p))`, so that the load is an ordinary
+/// scalar one (of a field, a global or a stack slot). QuakeC values are all
+/// floats, so the load's lanes being `i32` or `f32` doesn't matter.
+pub fn split_splat_loads(body: &mut waffle::FunctionBody) {
+    use waffle::{Operator as O, Type, ValueDef};
+    let f32_ty = body.single_type_list(Type::F32);
+    let blocks: Vec<_> = body.blocks.iter().collect();
+    for b in blocks {
+        let mut i = 0;
+        while i < body.blocks[b].insts.len() {
+            let v = body.blocks[b].insts[i];
+            i += 1;
+            let ValueDef::Operator(O::V128Load32Splat { memory }, args, tys) = body.values[v]
+            else {
+                continue;
+            };
+            let l = body.add_value(ValueDef::Operator(O::F32Load { memory }, args, f32_ty));
+            body.blocks[b].insts.insert(i - 1, l);
+            i += 1;
+            let args = body.arg_pool.from_iter([l].into_iter());
+            body.values[v] = ValueDef::Operator(O::F32x4Splat, args, tys);
+        }
+    }
+}
+
+/// Duplicate each block that accesses memory at `p + k` (or `k + p`) for a
+/// parameter `k` that every predecessor passes a constant, into a copy per
+/// incoming branch with `k` replaced by the constant. LLVM sinks stores to
+/// different fields of an entity from both sides of a branch into one, at
+/// `e + phi(off1, off2)`; QuakeC has no field pointers, so each field
+/// access needs a constant offset. The block's values mustn't be used
+/// outside it (except by its own branch arguments).
+pub fn duplicate_offset_blocks(body: &mut waffle::FunctionBody) {
+    use std::collections::{HashMap, HashSet};
+    use waffle::{Block, Operator as O, Terminator, Value, ValueDef};
+    // Each edge into each block: its source and arguments.
+    let mut incoming: HashMap<Block, Vec<Vec<Value>>> = HashMap::new();
+    for (_, def) in body.blocks.entries() {
+        def.terminator
+            .visit_targets(|t| incoming.entry(t.block).or_default().push(t.args.clone()));
+    }
+    // Where each value is used: its block (`None` for anything else).
+    let mut used_in: HashMap<Value, HashSet<Block>> = HashMap::new();
+    for (b, def) in body.blocks.entries() {
+        for &v in &def.insts {
+            body.values[v].visit_uses(&body.arg_pool, |a| {
+                used_in.entry(body.resolve_alias(a)).or_default().insert(b);
+            });
+        }
+        def.terminator.visit_uses(|a| {
+            used_in.entry(body.resolve_alias(a)).or_default().insert(b);
+        });
+    }
+    let blocks: Vec<_> = body.blocks.iter().filter(|&b| b != body.entry).collect();
+    let mut changed = false;
+    for b in blocks {
+        let def = &body.blocks[b];
+        let Some(edges) = incoming.get(&b) else {
+            continue;
+        };
+        let constant_param = |i: usize| {
+            edges.len() > 1
+                && edges
+                    .iter()
+                    .all(|args| crate::infer::const_val(body, args[i]).is_some())
+        };
+        let offset_params: HashSet<Value> = def
+            .params
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| constant_param(i))
+            .map(|(_, &(_, p))| p)
+            .collect();
+        let is_offset_address = |addr: Value| match &body.values[body.resolve_alias(addr)] {
+            ValueDef::Operator(O::I32Add, args, _) => body.arg_pool[*args]
+                .iter()
+                .any(|&a| offset_params.contains(&body.resolve_alias(a))),
+            _ => false,
+        };
+        let wanted = def.insts.iter().any(|&v| match &body.values[v] {
+            ValueDef::Operator(op, args, _) => {
+                matches!(crate::memory::cells(op), Ok(Some(_)))
+                    && is_offset_address(body.arg_pool[*args][0])
+            }
+            _ => false,
+        });
+        let local = def
+            .params
+            .iter()
+            .map(|&(_, p)| p)
+            .chain(def.insts.iter().copied())
+            .all(|v| used_in.get(&v).is_none_or(|bs| bs.iter().all(|&u| u == b)));
+        let copyable = def.insts.iter().all(|&v| {
+            matches!(
+                body.values[v],
+                ValueDef::Operator(..) | ValueDef::PickOutput(..)
+            )
+        });
+        if !wanted || !local || !copyable {
+            continue;
+        }
+        // Copy the block for each incoming edge, retargeting the edge.
+        let preds: Vec<Block> = body.blocks.iter().collect();
+        for pred in preds {
+            let mut term = body.blocks[pred].terminator.clone();
+            let mut copies = Vec::new();
+            term.update_targets(|t| {
+                if t.block == b {
+                    copies.push(std::mem::take(&mut t.args));
+                }
+            });
+            if copies.is_empty() {
+                continue;
+            }
+            let mut copies = copies.into_iter();
+            let mut new_blocks = Vec::new();
+            for args in copies.by_ref() {
+                new_blocks.push(copy_block(body, b, &args));
+            }
+            let mut new_blocks = new_blocks.into_iter();
+            term.update_targets(|t| {
+                if t.block == b {
+                    t.block = new_blocks.next().unwrap();
+                }
+            });
+            body.blocks[pred].terminator = term;
+        }
+        body.blocks[b].insts.clear();
+        body.blocks[b].terminator = Terminator::Unreachable;
+        changed = true;
+    }
+    if changed {
+        body.recompute_edges();
+    }
+
+    /// A copy of block `b`, with its parameters replaced by `args`.
+    fn copy_block(body: &mut waffle::FunctionBody, b: Block, args: &[Value]) -> Block {
+        let new = body.add_block();
+        let mut map: HashMap<Value, Value> = body.blocks[b]
+            .params
+            .iter()
+            .map(|&(_, p)| p)
+            .zip(args.iter().copied())
+            .collect();
+        for v in body.blocks[b].insts.clone() {
+            let sub = |body: &waffle::FunctionBody, map: &HashMap<Value, Value>, a: Value| {
+                let r = body.resolve_alias(a);
+                map.get(&r).copied().unwrap_or(a)
+            };
+            // A fresh argument list (the original's is shared).
+            let def = match body.values[v] {
+                ValueDef::Operator(op, args, tys) => {
+                    let args: Vec<Value> = body.arg_pool[args]
+                        .iter()
+                        .map(|&a| sub(body, &map, a))
+                        .collect();
+                    ValueDef::Operator(op, body.arg_pool.from_iter(args.into_iter()), tys)
+                }
+                ValueDef::PickOutput(x, i, ty) => ValueDef::PickOutput(sub(body, &map, x), i, ty),
+                _ => unreachable!("only operators are copied"),
+            };
+            let c = body.add_value(def);
+            body.append_to_block(new, c);
+            map.insert(v, c);
+        }
+        let mut term = body.blocks[b].terminator.clone();
+        term.update_uses(|a| {
+            let r = body.resolve_alias(*a);
+            if let Some(&m) = map.get(&r) {
+                *a = m;
+            }
+        });
+        body.blocks[new].terminator = term;
+        new
+    }
+}
+
+/// Rewrite `i32x4.extract_lane 2i (i64x2.extend_{low,high}_i32x4_{s,u} x)`
+/// (the low half of a 64-bit lane) into `i32x4.extract_lane j x` for the
+/// lane `j` it came from. LLVM widens comparison masks this way. The
+/// extensions left unused are removed.
+pub fn narrow_extended_lanes(body: &mut waffle::FunctionBody) {
+    use waffle::{Operator as O, ValueDef};
+    let mut changed = false;
+    let values: Vec<_> = body.values.iter().collect();
+    for v in values {
+        let ValueDef::Operator(O::I32x4ExtractLane { lane }, args, tys) = body.values[v] else {
+            continue;
+        };
+        if lane % 2 != 0 {
+            continue;
+        }
+        let x = body.resolve_alias(body.arg_pool[args][0]);
+        let ValueDef::Operator(op, xargs, _) = body.values[x] else {
+            continue;
+        };
+        let base = match op {
+            O::I64x2ExtendLowI32x4S | O::I64x2ExtendLowI32x4U => 0,
+            O::I64x2ExtendHighI32x4S | O::I64x2ExtendHighI32x4U => 2,
+            _ => continue,
+        };
+        let src = body.arg_pool[xargs][0];
+        let args = body.arg_pool.from_iter([src].into_iter());
+        body.values[v] = ValueDef::Operator(
+            O::I32x4ExtractLane {
+                lane: base + lane / 2,
+            },
+            args,
+            tys,
+        );
+        changed = true;
+    }
+    if changed {
+        remove_dead(body, |op| {
+            matches!(
+                op,
+                O::I64x2ExtendLowI32x4S
+                    | O::I64x2ExtendLowI32x4U
+                    | O::I64x2ExtendHighI32x4S
+                    | O::I64x2ExtendHighI32x4U
+            )
+        });
+    }
+}

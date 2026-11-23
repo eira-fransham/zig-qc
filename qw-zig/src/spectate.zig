@@ -26,10 +26,10 @@ const S = q.S;
 pub export fn SpectatorConnect() void {
     const self = q.me();
     q.bprint(q.PRINT_MEDIUM, S("Spectator "));
-    q.bprint(q.PRINT_MEDIUM, self.get(.netname));
+    q.bprint(q.PRINT_MEDIUM, self.netname);
     q.bprint(q.PRINT_MEDIUM, S(" entered the game\n"));
 
-    self.set(.goalentity, q.world.get()); // used for impulse 1 below
+    self.goalentity = q.world.get(); // used for impulse 1 below
 }
 
 /// SpectatorDisconnect
@@ -38,7 +38,7 @@ pub export fn SpectatorConnect() void {
 pub export fn SpectatorDisconnect() void {
     const self = q.me();
     q.bprint(q.PRINT_MEDIUM, S("Spectator "));
-    q.bprint(q.PRINT_MEDIUM, self.get(.netname));
+    q.bprint(q.PRINT_MEDIUM, self.netname);
     q.bprint(q.PRINT_MEDIUM, S(" left the game\n"));
 }
 
@@ -47,21 +47,21 @@ pub export fn SpectatorDisconnect() void {
 /// Called by SpectatorThink if the spectator entered an impulse
 pub fn SpectatorImpulseCommand() callconv(.c) void {
     const self = q.me();
-    if (self.get(.impulse) == 1) {
+    if (self.impulse == 1) {
         // teleport the spectator to the next spawn point
         // note that if the spectator is tracking, this doesn't do
         // much
-        self.set(.goalentity, q.find(self.get(.goalentity), .classname, S("info_player_deathmatch")));
-        if (self.get(.goalentity).eql(q.world.get()))
-            self.set(.goalentity, q.find(self.get(.goalentity), .classname, S("info_player_deathmatch")));
-        if (self.get(.goalentity).neq(q.world.get())) {
-            q.setorigin(self, self.get(.goalentity).get(.origin));
-            self.set(.angles, self.get(.goalentity).get(.angles));
-            self.set(.fixangle, q.TRUE); // turn this way immediately
+        self.goalentity = q.find(self.goalentity, .classname, S("info_player_deathmatch"));
+        if (self.goalentity.eql(q.world.get()))
+            self.goalentity = q.find(self.goalentity, .classname, S("info_player_deathmatch"));
+        if (self.goalentity.neq(q.world.get())) {
+            q.setorigin(self, self.goalentity.origin);
+            self.angles = self.goalentity.angles;
+            self.fixangle = q.TRUE; // turn this way immediately
         }
     }
 
-    self.set(.impulse, 0);
+    self.impulse = 0;
 }
 
 /// SpectatorThink
@@ -71,6 +71,6 @@ pub export fn SpectatorThink() void {
     // self.origin, etc contains spectator position, so you could
     // do some neat stuff here
 
-    if (q.me().get(.impulse) != 0)
+    if (q.me().impulse != 0)
         SpectatorImpulseCommand();
 }

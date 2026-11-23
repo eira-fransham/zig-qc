@@ -506,6 +506,11 @@ impl Emitter<'_, '_> {
                 }
                 Ok(Expr::Float(c as f32))
             }
+            Kind::FloatBits => {
+                let f = f32::from_bits(c as u32);
+                ensure!(f.is_finite(), "non-finite float constant {f}");
+                Ok(Expr::Float(f))
+            }
             Kind::Func => {
                 let Some(&f) = self.ctx.table_funcs.get(&(addr as u64)) else {
                     ensure!(

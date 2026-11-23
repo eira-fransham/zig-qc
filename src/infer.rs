@@ -49,6 +49,11 @@ use crate::translate::{Ctx, FuncKind, Intrinsic};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
     Float,
+    /// A float moved as an `i32` of its bits: LLVM copies and stores 4-byte
+    /// floats (e.g. entity fields) as integers, and passes them as such. Only
+    /// moved, never used as a number: constants of this kind are a float's
+    /// bits.
+    FloatBits,
     Vector,
     Entity,
     String,
@@ -63,7 +68,7 @@ pub enum Kind {
 impl Kind {
     pub fn qc(self) -> QcType {
         match self {
-            Kind::Float => QcType::Float,
+            Kind::Float | Kind::FloatBits => QcType::Float,
             Kind::Vector => QcType::Vector,
             Kind::Entity => QcType::Entity,
             Kind::String => QcType::String,
@@ -110,7 +115,10 @@ impl Kind {
 
 impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.qc().name())
+        match self {
+            Kind::FloatBits => f.write_str("float bits (a float moved as an i32)"),
+            _ => f.write_str(self.qc().name()),
+        }
     }
 }
 
@@ -852,9 +860,13 @@ impl Infer {
                      `set`)"
                 );
             };
-            let k = Kind::from_qc(ty).expect("a value type");
+            let mut k = Kind::from_qc(ty).expect("a value type");
             let ok = match c.cell {
                 Cell::F32 | Cell::Lane => k == Kind::Float,
+                Cell::I32 if k == Kind::Float => {
+                    k = Kind::FloatBits;
+                    true
+                }
                 Cell::I32 => matches!(k, Kind::Entity | Kind::String | Kind::Func),
                 Cell::Narrow(_) => false,
             };
@@ -866,7 +878,7 @@ impl Infer {
             );
             if let Some(x) = access.scalar {
                 let what = why(&format!("the field `{name}`"));
-                if k == Kind::Float {
+                if matches!(k, Kind::Float | Kind::FloatBits) {
                     self.uf.set_kind(x, k, &what)?;
                 } else {
                     self.uf.typed(x, k, &what)?;

@@ -354,6 +354,12 @@ fn entity_struct() {
 }
 
 #[test]
+fn field_moves() {
+    insta::assert_snapshot!(translate_wat("field_moves.wat"));
+    check_compiles(&wat::parse_file(fixture("field_moves.wat")).unwrap(), "");
+}
+
+#[test]
 fn entity_struct_errors() {
     let cases = [
         // Beyond the system fields.
@@ -363,10 +369,10 @@ fn entity_struct_errors() {
         ),
         // Inside a field.
         ("(f32.load offset=194 (local.get $e))", "isn't a field"),
-        // A float field read as an `i32`.
+        // A float field read as an `i32` (its bits) and used as a number.
         (
             "(f32.convert_i32_s (i32.load offset=192 (local.get $e)))",
-            "is accessed as i32",
+            "as float bits",
         ),
         // `&e.health` passed to a function.
         (

@@ -21,7 +21,7 @@ pub const s = q.userGlobal(Entity, "s");
 pub const old = q.userGlobal(Entity, "old");
 
 pub fn trigger_reactivate() callconv(.c) void {
-    q.me().set(.solid, q.SOLID_TRIGGER);
+    q.me().solid = q.SOLID_TRIGGER;
 }
 
 //=============================================================================
@@ -32,10 +32,10 @@ pub const SPAWNFLAG_NOTOUCH: f32 = 1;
 /// the wait time has passed, so set back up for another activation
 pub fn multi_wait() callconv(.c) void {
     const self = q.me();
-    if (self.get(.max_health) != 0) {
-        self.set(.health, self.get(.max_health));
-        self.set(.takedamage, q.DAMAGE_YES);
-        self.set(.solid, q.SOLID_BBOX);
+    if (self.max_health != 0) {
+        self.health = self.max_health;
+        self.takedamage = q.DAMAGE_YES;
+        self.solid = q.SOLID_BBOX;
     }
 }
 
@@ -44,62 +44,62 @@ pub fn multi_wait() callconv(.c) void {
 /// so wait for the delay time before firing
 pub fn multi_trigger() callconv(.c) void {
     const self = q.me();
-    if (self.get(.nextthink) > q.time.get()) {
+    if (self.nextthink > q.time.get()) {
         return; // allready been triggered
     }
 
-    if (self.get(.classname).eql(S("trigger_secret"))) {
-        if (self.get(.enemy).get(.classname).neq(S("player")))
+    if (self.classname.eql(S("trigger_secret"))) {
+        if (self.enemy.classname.neq(S("player")))
             return;
         q.found_secrets.set(q.found_secrets.get() + 1);
         q.WriteByte(q.MSG_ALL, q.SVC_FOUNDSECRET);
     }
 
-    if (!self.get(.noise).isNull())
-        q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
+    if (!self.noise.isNull())
+        q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
 
     // don't trigger again until reset
-    self.set(.takedamage, q.DAMAGE_NO);
+    self.takedamage = q.DAMAGE_NO;
 
-    q.activator.set(self.get(.enemy));
+    q.activator.set(self.enemy);
 
     subs.SUB_UseTargets();
 
     if (self.get(q.wait) > 0) {
-        self.set(.think, q.func(multi_wait));
-        self.set(.nextthink, q.time.get() + self.get(q.wait));
+        self.think = q.func(multi_wait);
+        self.nextthink = q.time.get() + self.get(q.wait);
     } else { // we can't just remove (self) here, because this is a touch function
         // called wheil C code is looping through area links...
-        self.set(.touch, q.func(subs.SUB_Null));
-        self.set(.nextthink, q.time.get() + 0.1);
-        self.set(.think, q.func(subs.SUB_Remove));
+        self.touch = q.func(subs.SUB_Null);
+        self.nextthink = q.time.get() + 0.1;
+        self.think = q.func(subs.SUB_Remove);
     }
 }
 
 pub fn multi_killed() callconv(.c) void {
-    q.me().set(.enemy, q.damage_attacker.get());
+    q.me().enemy = q.damage_attacker.get();
     multi_trigger();
 }
 
 pub fn multi_use() callconv(.c) void {
-    q.me().set(.enemy, q.activator.get());
+    q.me().enemy = q.activator.get();
     multi_trigger();
 }
 
 pub fn multi_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
-    if (other.get(.classname).neq(S("player")))
+    if (other.classname.neq(S("player")))
         return;
 
     // if the trigger has an angles field, check player's facing direction
-    if (!q.veq(self.get(.movedir), q.vec(0, 0, 0))) {
-        q.makevectors(other.get(.angles));
-        if (q.dot(q.v_forward.get(), self.get(.movedir)) < 0)
+    if (!q.veq(self.movedir, q.vec(0, 0, 0))) {
+        q.makevectors(other.angles);
+        if (q.dot(q.v_forward.get(), self.movedir) < 0)
             return; // not facing the right way
     }
 
-    self.set(.enemy, other);
+    self.enemy = other;
     multi_trigger();
 }
 
@@ -119,34 +119,34 @@ pub fn multi_touch() callconv(.c) void {
 /// set "message" to text string
 pub export fn trigger_multiple() void {
     const self = q.me();
-    if (self.get(.sounds) == 1) {
+    if (self.sounds == 1) {
         _ = q.precache_sound(S("misc/secret.wav"));
-        self.set(.noise, S("misc/secret.wav"));
-    } else if (self.get(.sounds) == 2) {
+        self.noise = S("misc/secret.wav");
+    } else if (self.sounds == 2) {
         _ = q.precache_sound(S("misc/talk.wav"));
-        self.set(.noise, S("misc/talk.wav"));
-    } else if (self.get(.sounds) == 3) {
+        self.noise = S("misc/talk.wav");
+    } else if (self.sounds == 3) {
         _ = q.precache_sound(S("misc/trigger1.wav"));
-        self.set(.noise, S("misc/trigger1.wav"));
+        self.noise = S("misc/trigger1.wav");
     }
 
     if (self.get(q.wait) == 0)
         self.set(q.wait, 0.2);
-    self.set(.use, q.func(multi_use));
+    self.use = q.func(multi_use);
 
     subs.InitTrigger();
 
-    if (self.get(.health) != 0) {
-        if (q.has(self.get(.spawnflags), SPAWNFLAG_NOTOUCH))
+    if (self.health != 0) {
+        if (q.has(self.spawnflags, SPAWNFLAG_NOTOUCH))
             q.objerror(S("health and notouch don't make sense\n"));
-        self.set(.max_health, self.get(.health));
+        self.max_health = self.health;
         self.set(q.th_die, q.func(multi_killed));
-        self.set(.takedamage, q.DAMAGE_YES);
-        self.set(.solid, q.SOLID_BBOX);
-        q.setorigin(self, self.get(.origin)); // make sure it links into the world
+        self.takedamage = q.DAMAGE_YES;
+        self.solid = q.SOLID_BBOX;
+        q.setorigin(self, self.origin); // make sure it links into the world
     } else {
-        if (!q.has(self.get(.spawnflags), SPAWNFLAG_NOTOUCH)) {
-            self.set(.touch, q.func(multi_touch));
+        if (!q.has(self.spawnflags, SPAWNFLAG_NOTOUCH)) {
+            self.touch = q.func(multi_touch);
         }
     }
 }
@@ -178,7 +178,7 @@ pub export fn trigger_once() void {
 /// This fixed size trigger cannot be touched, it can only be fired by other
 /// events.  It can contain killtargets, targets, delays, and messages.
 pub export fn trigger_relay() void {
-    q.me().set(.use, q.func(subs.SUB_UseTargets));
+    q.me().use = q.func(subs.SUB_UseTargets);
 }
 
 //=============================================================================
@@ -195,17 +195,17 @@ pub export fn trigger_secret() void {
     const self = q.me();
     q.total_secrets.set(q.total_secrets.get() + 1);
     self.set(q.wait, -1);
-    if (self.get(.message).isNull())
-        self.set(.message, S("You found a secret area!"));
-    if (self.get(.sounds) == 0)
-        self.set(.sounds, 1);
+    if (self.message.isNull())
+        self.message = S("You found a secret area!");
+    if (self.sounds == 0)
+        self.sounds = 1;
 
-    if (self.get(.sounds) == 1) {
+    if (self.sounds == 1) {
         _ = q.precache_sound(S("misc/secret.wav"));
-        self.set(.noise, S("misc/secret.wav"));
-    } else if (self.get(.sounds) == 2) {
+        self.noise = S("misc/secret.wav");
+    } else if (self.sounds == 2) {
         _ = q.precache_sound(S("misc/talk.wav"));
-        self.set(.noise, S("misc/talk.wav"));
+        self.noise = S("misc/talk.wav");
     }
 
     trigger_multiple();
@@ -222,7 +222,7 @@ pub fn counter_use() callconv(.c) void {
         return;
 
     if (self.get(q.count) != 0) {
-        if (activator.get(.classname).eql(S("player")) and q.band(self.get(.spawnflags), SPAWNFLAG_NOMESSAGE) == 0) {
+        if (activator.classname.eql(S("player")) and q.band(self.spawnflags, SPAWNFLAG_NOMESSAGE) == 0) {
             if (self.get(q.count) >= 4) {
                 q.centerprint(activator, S("There are more to go..."));
             } else if (self.get(q.count) == 3) {
@@ -236,9 +236,9 @@ pub fn counter_use() callconv(.c) void {
         return;
     }
 
-    if (activator.get(.classname).eql(S("player")) and q.band(self.get(.spawnflags), SPAWNFLAG_NOMESSAGE) == 0)
+    if (activator.classname.eql(S("player")) and q.band(self.spawnflags, SPAWNFLAG_NOMESSAGE) == 0)
         q.centerprint(activator, S("Sequence completed!"));
-    self.set(.enemy, activator);
+    self.enemy = activator;
     multi_trigger();
 }
 
@@ -256,7 +256,7 @@ pub export fn trigger_counter() void {
     if (self.get(q.count) == 0)
         self.set(q.count, 2);
 
-    self.set(.use, q.func(counter_use));
+    self.use = q.func(counter_use);
 }
 
 // ==============================================================================
@@ -290,9 +290,9 @@ pub fn play_teleport() callconv(.c) void {
 pub fn spawn_tfog(org: Vector) callconv(.c) void {
     s.set(q.spawn());
     const e = s.get();
-    e.set(.origin, org);
-    e.set(.nextthink, q.time.get() + 0.2);
-    e.set(.think, q.func(play_teleport));
+    e.origin = org;
+    e.nextthink = q.time.get() + 0.2;
+    e.think = q.func(play_teleport);
 
     q.WriteByte(q.MSG_MULTICAST, q.SVC_TEMPENTITY);
     q.WriteByte(q.MSG_MULTICAST, q.TE_TELEPORT);
@@ -306,47 +306,47 @@ pub fn tdeath_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
-    if (other.eql(self.get(.owner)))
+    if (other.eql(self.owner))
         return;
 
     // frag anyone who teleports in on top of an invincible player
-    if (other.get(.classname).eql(S("player"))) {
+    if (other.classname.eql(S("player"))) {
         if (other.get(q.invincible_finished) > q.time.get() and
-            self.get(.owner).get(q.invincible_finished) > q.time.get())
+            self.owner.get(q.invincible_finished) > q.time.get())
         {
-            self.set(.classname, S("teledeath3"));
+            self.classname = S("teledeath3");
             other.set(q.invincible_finished, 0);
-            self.get(.owner).set(q.invincible_finished, 0);
+            self.owner.set(q.invincible_finished, 0);
             combat.T_Damage(other, self, self, 50000);
-            const other2 = self.get(.owner);
-            self.set(.owner, other);
+            const other2 = self.owner;
+            self.owner = other;
             combat.T_Damage(other2, self, self, 50000);
         }
 
         if (other.get(q.invincible_finished) > q.time.get()) {
-            self.set(.classname, S("teledeath2"));
-            combat.T_Damage(self.get(.owner), self, self, 50000);
+            self.classname = S("teledeath2");
+            combat.T_Damage(self.owner, self, self, 50000);
             return;
         }
     }
 
-    if (other.get(.health) != 0) {
+    if (other.health != 0) {
         combat.T_Damage(other, self, self, 50000);
     }
 }
 
 pub fn spawn_tdeath(org: Vector, death_owner: Entity) callconv(.c) void {
     const death = q.spawn();
-    death.set(.classname, S("teledeath"));
-    death.set(.movetype, q.MOVETYPE_NONE);
-    death.set(.solid, q.SOLID_TRIGGER);
-    death.set(.angles, q.vec(0, 0, 0));
-    q.setsize(death, death_owner.get(.mins) - q.vec(1, 1, 1), death_owner.get(.maxs) + q.vec(1, 1, 1));
+    death.classname = S("teledeath");
+    death.movetype = q.MOVETYPE_NONE;
+    death.solid = q.SOLID_TRIGGER;
+    death.angles = q.vec(0, 0, 0);
+    q.setsize(death, death_owner.mins - q.vec(1, 1, 1), death_owner.maxs + q.vec(1, 1, 1));
     q.setorigin(death, org);
-    death.set(.touch, q.func(tdeath_touch));
-    death.set(.nextthink, q.time.get() + 0.2);
-    death.set(.think, q.func(subs.SUB_Remove));
-    death.set(.owner, death_owner);
+    death.touch = q.func(tdeath_touch);
+    death.nextthink = q.time.get() + 0.2;
+    death.think = q.func(subs.SUB_Remove);
+    death.owner = death_owner;
 
     q.force_retouch.set(2); // make sure even still objects get hit
 }
@@ -355,57 +355,57 @@ pub fn teleport_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
-    if (!self.get(.targetname).isNull()) {
-        if (self.get(.nextthink) < q.time.get()) {
+    if (!self.targetname.isNull()) {
+        if (self.nextthink < q.time.get()) {
             return; // not fired yet
         }
     }
 
-    if (q.has(self.get(.spawnflags), PLAYER_ONLY)) {
-        if (other.get(.classname).neq(S("player")))
+    if (q.has(self.spawnflags, PLAYER_ONLY)) {
+        if (other.classname.neq(S("player")))
             return;
     }
 
     // only teleport living creatures
-    if (other.get(.health) <= 0 or other.get(.solid) != q.SOLID_SLIDEBOX)
+    if (other.health <= 0 or other.solid != q.SOLID_SLIDEBOX)
         return;
 
     subs.SUB_UseTargets();
 
     // put a tfog where the player was
-    spawn_tfog(other.get(.origin));
+    spawn_tfog(other.origin);
 
-    const t = q.find(q.world.get(), .targetname, self.get(.target));
+    const t = q.find(q.world.get(), .targetname, self.target);
     if (t.isNull())
         q.objerror(S("couldn't find target"));
 
     // spawn a tfog flash in front of the destination
     q.makevectors(t.get(q.mangle));
-    const org = t.get(.origin) + q.scale(q.v_forward.get(), 32);
+    const org = t.origin + q.scale(q.v_forward.get(), 32);
 
     spawn_tfog(org);
-    spawn_tdeath(t.get(.origin), other);
+    spawn_tdeath(t.origin, other);
 
     // move the player and lock him down for a little while
-    if (other.get(.health) == 0) {
-        other.set(.origin, t.get(.origin));
-        const vel = other.get(.velocity);
-        other.set(.velocity, q.scale(q.v_forward.get(), vel[0]) + q.scale(q.v_forward.get(), vel[1]));
+    if (other.health == 0) {
+        other.origin = t.origin;
+        const vel = other.velocity;
+        other.velocity = q.scale(q.v_forward.get(), vel[0]) + q.scale(q.v_forward.get(), vel[1]);
         return;
     }
 
-    q.setorigin(other, t.get(.origin));
-    other.set(.angles, t.get(q.mangle));
-    if (other.get(.classname).eql(S("player"))) {
-        other.set(.fixangle, 1); // turn this way immediately
-        other.set(.teleport_time, q.time.get() + 0.7);
-        if (q.has(other.get(.flags), q.FL_ONGROUND))
-            other.set(.flags, other.get(.flags) - q.FL_ONGROUND);
-        other.set(.velocity, q.scale(q.v_forward.get(), 300));
+    q.setorigin(other, t.origin);
+    other.angles = t.get(q.mangle);
+    if (other.classname.eql(S("player"))) {
+        other.fixangle = 1; // turn this way immediately
+        other.teleport_time = q.time.get() + 0.7;
+        if (q.has(other.flags, q.FL_ONGROUND))
+            other.flags = other.flags - q.FL_ONGROUND;
+        other.velocity = q.scale(q.v_forward.get(), 300);
     }
     // `other.flags - other.flags & FL_ONGROUND`: `&` binds tighter than `-`
     // in QuakeC.
-    other.set(.flags, other.get(.flags) - q.band(other.get(.flags), q.FL_ONGROUND));
+    other.flags = other.flags - q.band(other.flags, q.FL_ONGROUND);
 }
 
 /// QUAKED info_teleport_destination (.5 .5 .5) (-8 -8 -8) (8 8 32)
@@ -414,19 +414,19 @@ pub fn teleport_touch() callconv(.c) void {
 pub export fn info_teleport_destination() void {
     const self = q.me();
     // this does nothing, just serves as a target spot
-    self.set(q.mangle, self.get(.angles));
-    self.set(.angles, q.vec(0, 0, 0));
-    self.set(.model, S(""));
-    self.set(.origin, self.get(.origin) + q.vec(0, 0, 27));
-    if (self.get(.targetname).isNull())
+    self.set(q.mangle, self.angles);
+    self.angles = q.vec(0, 0, 0);
+    self.model = S("");
+    self.origin = self.origin + q.vec(0, 0, 27);
+    if (self.targetname.isNull())
         q.objerror(S("no targetname"));
 }
 
 pub fn teleport_use() callconv(.c) void {
     const self = q.me();
-    self.set(.nextthink, q.time.get() + 0.2);
+    self.nextthink = q.time.get() + 0.2;
     q.force_retouch.set(2); // make sure even still objects get hit
-    self.set(.think, q.func(subs.SUB_Null));
+    self.think = q.func(subs.SUB_Null);
 }
 
 /// QUAKED trigger_teleport (.5 .5 .5) ? PLAYER_ONLY SILENT
@@ -440,15 +440,15 @@ pub export fn trigger_teleport() void {
     const self = q.me();
 
     subs.InitTrigger();
-    self.set(.touch, q.func(teleport_touch));
+    self.touch = q.func(teleport_touch);
     // find the destination
-    if (self.get(.target).isNull())
+    if (self.target.isNull())
         q.objerror(S("no target"));
-    self.set(.use, q.func(teleport_use));
+    self.use = q.func(teleport_use);
 
-    if (!q.has(self.get(.spawnflags), SILENT)) {
+    if (!q.has(self.spawnflags, SILENT)) {
         _ = q.precache_sound(S("ambience/hum1.wav"));
-        const o = q.scale(self.get(.mins) + self.get(.maxs), 0.5);
+        const o = q.scale(@as(Vector, self.mins) + self.maxs, 0.5);
         q.ambientsound(o, S("ambience/hum1.wav"), 0.5, q.ATTN_STATIC);
     }
 }
@@ -475,19 +475,19 @@ pub export fn trigger_setskill() void {
 pub fn trigger_onlyregistered_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
-    if (other.get(.classname).neq(S("player")))
+    if (other.classname.neq(S("player")))
         return;
     if (self.get(q.attack_finished) > q.time.get())
         return;
 
     self.set(q.attack_finished, q.time.get() + 2);
     if (q.cvar(S("registered")) != 0) {
-        self.set(.message, S(""));
+        self.message = S("");
         subs.SUB_UseTargets();
         q.remove(self);
     } else {
-        if (self.get(.message).neq(S(""))) {
-            q.centerprint(other, self.get(.message));
+        if (self.message.neq(S(""))) {
+            q.centerprint(other, self.message);
             q.sound(other, q.CHAN_BODY, S("misc/talk.wav"), 1, q.ATTN_NORM);
         }
     }
@@ -498,25 +498,25 @@ pub fn trigger_onlyregistered_touch() callconv(.c) void {
 pub export fn trigger_onlyregistered() void {
     _ = q.precache_sound(S("misc/talk.wav"));
     subs.InitTrigger();
-    q.me().set(.touch, q.func(trigger_onlyregistered_touch));
+    q.me().touch = q.func(trigger_onlyregistered_touch);
 }
 
 //============================================================================
 
 pub fn hurt_on() callconv(.c) void {
     const self = q.me();
-    self.set(.solid, q.SOLID_TRIGGER);
-    self.set(.nextthink, -1);
+    self.solid = q.SOLID_TRIGGER;
+    self.nextthink = -1;
 }
 
 pub fn hurt_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
-    if (other.get(.takedamage) != 0) {
-        self.set(.solid, q.SOLID_NOT);
+    if (other.takedamage != 0) {
+        self.solid = q.SOLID_NOT;
         combat.T_Damage(other, self, self, self.get(q.dmg));
-        self.set(.think, q.func(hurt_on));
-        self.set(.nextthink, q.time.get() + 1);
+        self.think = q.func(hurt_on);
+        self.nextthink = q.time.get() + 1;
     }
 
     return;
@@ -529,7 +529,7 @@ pub fn hurt_touch() callconv(.c) void {
 pub export fn trigger_hurt() void {
     const self = q.me();
     subs.InitTrigger();
-    self.set(.touch, q.func(hurt_touch));
+    self.touch = q.func(hurt_touch);
     if (self.get(q.dmg) == 0)
         self.set(q.dmg, 5);
 }
@@ -541,18 +541,18 @@ pub const PUSH_ONCE: f32 = 1;
 pub fn trigger_push_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
-    if (other.get(.classname).eql(S("grenade"))) {
-        other.set(.velocity, q.scale(self.get(.movedir), self.get(q.speed) * 10));
-    } else if (other.get(.health) > 0) {
-        other.set(.velocity, q.scale(self.get(.movedir), self.get(q.speed) * 10));
-        if (other.get(.classname).eql(S("player"))) {
+    if (other.classname.eql(S("grenade"))) {
+        other.velocity = q.scale(self.movedir, self.get(q.speed) * 10);
+    } else if (other.health > 0) {
+        other.velocity = q.scale(self.movedir, self.get(q.speed) * 10);
+        if (other.classname.eql(S("player"))) {
             if (other.get(q.fly_sound) < q.time.get()) {
                 other.set(q.fly_sound, q.time.get() + 1.5);
                 q.sound(other, q.CHAN_AUTO, S("ambience/windfly.wav"), 1, q.ATTN_NORM);
             }
         }
     }
-    if (q.has(self.get(.spawnflags), PUSH_ONCE))
+    if (q.has(self.spawnflags, PUSH_ONCE))
         q.remove(self);
 }
 
@@ -562,7 +562,7 @@ pub export fn trigger_push() void {
     const self = q.me();
     subs.InitTrigger();
     _ = q.precache_sound(S("ambience/windfly.wav"));
-    self.set(.touch, q.func(trigger_push_touch));
+    self.touch = q.func(trigger_push_touch);
     if (self.get(q.speed) == 0)
         self.set(q.speed, 1000);
 }
@@ -574,23 +574,23 @@ pub fn trigger_monsterjump_touch() callconv(.c) void {
     const other = q.other.get();
     // `other.flags & (...) != FL_MONSTER`: `&` binds tighter than `!=` in
     // QuakeC.
-    if (q.band(other.get(.flags), q.bor(q.bor(q.FL_MONSTER, q.FL_FLY), q.FL_SWIM)) != q.FL_MONSTER)
+    if (q.band(other.flags, q.bor(q.bor(q.FL_MONSTER, q.FL_FLY), q.FL_SWIM)) != q.FL_MONSTER)
         return;
 
     // set XY even if not on ground, so the jump will clear lips
-    var vel = other.get(.velocity);
-    vel[0] = self.get(.movedir)[0] * self.get(q.speed);
-    vel[1] = self.get(.movedir)[1] * self.get(q.speed);
-    other.set(.velocity, vel);
+    var vel = other.velocity;
+    vel[0] = self.movedir[0] * self.get(q.speed);
+    vel[1] = self.movedir[1] * self.get(q.speed);
+    other.velocity = vel;
 
-    if (!q.has(other.get(.flags), q.FL_ONGROUND))
+    if (!q.has(other.flags, q.FL_ONGROUND))
         return;
 
-    other.set(.flags, other.get(.flags) - q.FL_ONGROUND);
+    other.flags = other.flags - q.FL_ONGROUND;
 
-    vel = other.get(.velocity);
+    vel = other.velocity;
     vel[2] = self.get(q.height);
-    other.set(.velocity, vel);
+    other.velocity = vel;
 }
 
 /// QUAKED trigger_monsterjump (.5 .5 .5) ?
@@ -604,8 +604,8 @@ pub export fn trigger_monsterjump() void {
         self.set(q.speed, 200);
     if (self.get(q.height) == 0)
         self.set(q.height, 200);
-    if (q.veq(self.get(.angles), q.vec(0, 0, 0)))
-        self.set(.angles, q.vec(0, 360, 0));
+    if (q.veq(self.angles, q.vec(0, 0, 0)))
+        self.angles = q.vec(0, 360, 0);
     subs.InitTrigger();
-    self.set(.touch, q.func(trigger_monsterjump_touch));
+    self.touch = q.func(trigger_monsterjump_touch);
 }

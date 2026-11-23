@@ -22,18 +22,18 @@ pub fn plat_spawn_inside_trigger() callconv(.c) void {
     // middle trigger
     //
     const trigger = q.spawn();
-    trigger.set(.touch, q.func(plat_center_touch));
-    trigger.set(.movetype, q.MOVETYPE_NONE);
-    trigger.set(.solid, q.SOLID_TRIGGER);
-    trigger.set(.enemy, self);
+    trigger.touch = q.func(plat_center_touch);
+    trigger.movetype = q.MOVETYPE_NONE;
+    trigger.solid = q.SOLID_TRIGGER;
+    trigger.enemy = self;
 
-    const mins = self.get(.mins);
-    const maxs = self.get(.maxs);
-    const size = self.get(.size);
+    const mins = self.mins;
+    const maxs = self.maxs;
+    const size = self.size;
     var tmin = mins + q.vec(25, 25, 0);
     var tmax = maxs - q.vec(25, 25, -8);
     tmin[2] = tmax[2] - (self.get(q.pos1)[2] - self.get(q.pos2)[2] + 8);
-    if (q.has(self.get(.spawnflags), PLAT_LOW_TRIGGER))
+    if (q.has(self.spawnflags, PLAT_LOW_TRIGGER))
         tmax[2] = tmin[2] + 8;
 
     if (size[0] <= 50) {
@@ -50,67 +50,67 @@ pub fn plat_spawn_inside_trigger() callconv(.c) void {
 
 pub fn plat_hit_top() callconv(.c) void {
     const self = q.me();
-    q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.get(.noise1), 1, q.ATTN_NORM);
+    q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_TOP);
-    self.set(.think, q.func(plat_go_down));
-    self.set(.nextthink, self.get(.ltime) + 3);
+    self.think = q.func(plat_go_down);
+    self.nextthink = self.ltime + 3;
 }
 
 pub fn plat_hit_bottom() callconv(.c) void {
     const self = q.me();
-    q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.get(.noise1), 1, q.ATTN_NORM);
+    q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_BOTTOM);
 }
 
 pub fn plat_go_down() callconv(.c) void {
     const self = q.me();
-    q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
+    q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_DOWN);
     subs.SUB_CalcMove(self.get(q.pos2), self.get(q.speed), q.func(plat_hit_bottom));
 }
 
 pub fn plat_go_up() callconv(.c) void {
     const self = q.me();
-    q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
+    q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     self.set(q.state, q.STATE_UP);
     subs.SUB_CalcMove(self.get(q.pos1), self.get(q.speed), q.func(plat_hit_top));
 }
 
 pub fn plat_center_touch() callconv(.c) void {
     const other = q.other.get();
-    if (other.get(.classname).neq(S("player")))
+    if (other.classname.neq(S("player")))
         return;
 
-    if (other.get(.health) <= 0)
+    if (other.health <= 0)
         return;
 
     // (`self` is not restored afterwards in the original.)
-    const self = q.me().get(.enemy);
+    const self = q.me().enemy;
     q.self.set(self);
     if (self.get(q.state) == q.STATE_BOTTOM) {
         plat_go_up();
     } else if (self.get(q.state) == q.STATE_TOP) {
-        self.set(.nextthink, self.get(.ltime) + 1); // delay going down
+        self.nextthink = self.ltime + 1; // delay going down
     }
 }
 
 pub fn plat_outside_touch() callconv(.c) void {
     const other = q.other.get();
-    if (other.get(.classname).neq(S("player")))
+    if (other.classname.neq(S("player")))
         return;
 
-    if (other.get(.health) <= 0)
+    if (other.health <= 0)
         return;
 
     //dprint ("plat_outside_touch\n");
-    const self = q.me().get(.enemy);
+    const self = q.me().enemy;
     q.self.set(self);
     if (self.get(q.state) == q.STATE_TOP)
         plat_go_down();
 }
 
 pub fn plat_trigger_use() callconv(.c) void {
-    if (!q.fnIsNull(q.me().get(.think)))
+    if (!q.fnIsNull(q.me().think))
         return; // allready activated
     plat_go_down();
 }
@@ -134,7 +134,7 @@ pub fn plat_crush() callconv(.c) void {
 
 pub fn plat_use() callconv(.c) void {
     const self = q.me();
-    self.set(.use, q.func(subs.SUB_Null));
+    self.use = q.func(subs.SUB_Null);
     if (self.get(q.state) != q.STATE_UP)
         q.objerror(S("plat_use: not in up state"));
     plat_go_down();
@@ -162,55 +162,55 @@ pub export fn func_plat() void {
     if (self.get(q.t_width) == 0)
         self.set(q.t_width, 10);
 
-    if (self.get(.sounds) == 0)
-        self.set(.sounds, 2);
+    if (self.sounds == 0)
+        self.sounds = 2;
     // FIX THIS TO LOAD A GENERIC PLAT SOUND
 
-    if (self.get(.sounds) == 1) {
+    if (self.sounds == 1) {
         _ = q.precache_sound(S("plats/plat1.wav"));
         _ = q.precache_sound(S("plats/plat2.wav"));
-        self.set(.noise, S("plats/plat1.wav"));
-        self.set(.noise1, S("plats/plat2.wav"));
+        self.noise = S("plats/plat1.wav");
+        self.noise1 = S("plats/plat2.wav");
     }
 
-    if (self.get(.sounds) == 2) {
+    if (self.sounds == 2) {
         _ = q.precache_sound(S("plats/medplat1.wav"));
         _ = q.precache_sound(S("plats/medplat2.wav"));
-        self.set(.noise, S("plats/medplat1.wav"));
-        self.set(.noise1, S("plats/medplat2.wav"));
+        self.noise = S("plats/medplat1.wav");
+        self.noise1 = S("plats/medplat2.wav");
     }
 
-    self.set(q.mangle, self.get(.angles));
-    self.set(.angles, q.vec(0, 0, 0));
+    self.set(q.mangle, self.angles);
+    self.angles = q.vec(0, 0, 0);
 
-    self.set(.classname, S("plat"));
-    self.set(.solid, q.SOLID_BSP);
-    self.set(.movetype, q.MOVETYPE_PUSH);
-    q.setorigin(self, self.get(.origin));
-    q.setmodel(self, self.get(.model));
-    q.setsize(self, self.get(.mins), self.get(.maxs));
+    self.classname = S("plat");
+    self.solid = q.SOLID_BSP;
+    self.movetype = q.MOVETYPE_PUSH;
+    q.setorigin(self, self.origin);
+    q.setmodel(self, self.model);
+    q.setsize(self, self.mins, self.maxs);
 
-    self.set(.blocked, q.func(plat_crush));
+    self.blocked = q.func(plat_crush);
     if (self.get(q.speed) == 0)
         self.set(q.speed, 150);
 
     // pos1 is the top position, pos2 is the bottom
-    self.set(q.pos1, self.get(.origin));
-    var pos2 = self.get(.origin);
+    self.set(q.pos1, self.origin);
+    var pos2 = self.origin;
     if (self.get(q.height) != 0) {
-        pos2[2] = self.get(.origin)[2] - self.get(q.height);
+        pos2[2] = self.origin[2] - self.get(q.height);
     } else {
-        pos2[2] = self.get(.origin)[2] - self.get(.size)[2] + 8;
+        pos2[2] = self.origin[2] - self.size[2] + 8;
     }
     self.set(q.pos2, pos2);
 
-    self.set(.use, q.func(plat_trigger_use));
+    self.use = q.func(plat_trigger_use);
 
     plat_spawn_inside_trigger(); // the "start moving" trigger
 
-    if (!self.get(.targetname).isNull()) {
+    if (!self.targetname.isNull()) {
         self.set(q.state, q.STATE_UP);
-        self.set(.use, q.func(plat_use));
+        self.use = q.func(plat_use);
     } else {
         q.setorigin(self, self.get(q.pos2));
         self.set(q.state, q.STATE_BOTTOM);
@@ -230,7 +230,7 @@ pub fn train_blocked() callconv(.c) void {
 }
 
 pub fn train_use() callconv(.c) void {
-    if (q.fnNeq(q.me().get(.think), q.func(func_train_find)))
+    if (q.fnNeq(q.me().think, q.func(func_train_find)))
         return; // already activated
     train_next();
 }
@@ -238,40 +238,40 @@ pub fn train_use() callconv(.c) void {
 pub fn train_wait() callconv(.c) void {
     const self = q.me();
     if (self.get(q.wait) != 0) {
-        self.set(.nextthink, self.get(.ltime) + self.get(q.wait));
-        q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
+        self.nextthink = self.ltime + self.get(q.wait);
+        q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     } else {
-        self.set(.nextthink, self.get(.ltime) + 0.1);
+        self.nextthink = self.ltime + 0.1;
     }
 
-    self.set(.think, q.func(train_next));
+    self.think = q.func(train_next);
 }
 
 pub fn train_next() callconv(.c) void {
     const self = q.me();
 
-    const targ = q.find(q.world.get(), .targetname, self.get(.target));
-    self.set(.target, targ.get(.target));
-    if (self.get(.target).isNull())
+    const targ = q.find(q.world.get(), .targetname, self.target);
+    self.target = targ.target;
+    if (self.target.isNull())
         q.objerror(S("train_next: no next target"));
     if (targ.get(q.wait) != 0) {
         self.set(q.wait, targ.get(q.wait));
     } else {
         self.set(q.wait, 0);
     }
-    q.sound(self, q.CHAN_VOICE, self.get(.noise1), 1, q.ATTN_NORM);
-    subs.SUB_CalcMove(targ.get(.origin) - self.get(.mins), self.get(q.speed), q.func(train_wait));
+    q.sound(self, q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
+    subs.SUB_CalcMove(@as(q.Vector, targ.origin) - self.mins, self.get(q.speed), q.func(train_wait));
 }
 
 pub fn func_train_find() callconv(.c) void {
     const self = q.me();
 
-    const targ = q.find(q.world.get(), .targetname, self.get(.target));
-    self.set(.target, targ.get(.target));
-    q.setorigin(self, targ.get(.origin) - self.get(.mins));
-    if (self.get(.targetname).isNull()) { // not triggered, so start immediately
-        self.set(.nextthink, self.get(.ltime) + 0.1);
-        self.set(.think, q.func(train_next));
+    const targ = q.find(q.world.get(), .targetname, self.target);
+    self.target = targ.target;
+    q.setorigin(self, @as(q.Vector, targ.origin) - self.mins);
+    if (self.targetname.isNull()) { // not triggered, so start immediately
+        self.nextthink = self.ltime + 0.1;
+        self.think = q.func(train_next);
     }
 }
 
@@ -289,40 +289,40 @@ pub export fn func_train() void {
     const self = q.me();
     if (self.get(q.speed) == 0)
         self.set(q.speed, 100);
-    if (self.get(.target).isNull())
+    if (self.target.isNull())
         q.objerror(S("func_train without a target"));
     if (self.get(q.dmg) == 0)
         self.set(q.dmg, 2);
 
-    if (self.get(.sounds) == 0) {
-        self.set(.noise, S("misc/null.wav"));
+    if (self.sounds == 0) {
+        self.noise = S("misc/null.wav");
         _ = q.precache_sound(S("misc/null.wav"));
-        self.set(.noise1, S("misc/null.wav"));
+        self.noise1 = S("misc/null.wav");
         _ = q.precache_sound(S("misc/null.wav"));
     }
 
-    if (self.get(.sounds) == 1) {
-        self.set(.noise, S("plats/train2.wav"));
+    if (self.sounds == 1) {
+        self.noise = S("plats/train2.wav");
         _ = q.precache_sound(S("plats/train2.wav"));
-        self.set(.noise1, S("plats/train1.wav"));
+        self.noise1 = S("plats/train1.wav");
         _ = q.precache_sound(S("plats/train1.wav"));
     }
 
     self.set(q.cnt, 1);
-    self.set(.solid, q.SOLID_BSP);
-    self.set(.movetype, q.MOVETYPE_PUSH);
-    self.set(.blocked, q.func(train_blocked));
-    self.set(.use, q.func(train_use));
-    self.set(.classname, S("train"));
+    self.solid = q.SOLID_BSP;
+    self.movetype = q.MOVETYPE_PUSH;
+    self.blocked = q.func(train_blocked);
+    self.use = q.func(train_use);
+    self.classname = S("train");
 
-    q.setmodel(self, self.get(.model));
-    q.setsize(self, self.get(.mins), self.get(.maxs));
-    q.setorigin(self, self.get(.origin));
+    q.setmodel(self, self.model);
+    q.setsize(self, self.mins, self.maxs);
+    q.setorigin(self, self.origin);
 
     // start trains on the second frame, to make sure their targets have had
     // a chance to spawn
-    self.set(.nextthink, self.get(.ltime) + 0.1);
-    self.set(.think, q.func(func_train_find));
+    self.nextthink = self.ltime + 0.1;
+    self.think = q.func(func_train_find);
 }
 
 /// QUAKED misc_teleporttrain (0 .5 .8) (-8 -8 -8) (8 8 8)
@@ -331,28 +331,28 @@ pub export fn misc_teleporttrain() void {
     const self = q.me();
     if (self.get(q.speed) == 0)
         self.set(q.speed, 100);
-    if (self.get(.target).isNull())
+    if (self.target.isNull())
         q.objerror(S("func_train without a target"));
 
     self.set(q.cnt, 1);
-    self.set(.solid, q.SOLID_NOT);
-    self.set(.movetype, q.MOVETYPE_PUSH);
-    self.set(.blocked, q.func(train_blocked));
-    self.set(.use, q.func(train_use));
-    self.set(.avelocity, q.vec(100, 200, 300));
+    self.solid = q.SOLID_NOT;
+    self.movetype = q.MOVETYPE_PUSH;
+    self.blocked = q.func(train_blocked);
+    self.use = q.func(train_use);
+    self.avelocity = q.vec(100, 200, 300);
 
-    self.set(.noise, S("misc/null.wav"));
+    self.noise = S("misc/null.wav");
     _ = q.precache_sound(S("misc/null.wav"));
-    self.set(.noise1, S("misc/null.wav"));
+    self.noise1 = S("misc/null.wav");
     _ = q.precache_sound(S("misc/null.wav"));
 
     _ = q.precache_model2(S("progs/teleport.mdl"));
     q.setmodel(self, S("progs/teleport.mdl"));
-    q.setsize(self, self.get(.mins), self.get(.maxs));
-    q.setorigin(self, self.get(.origin));
+    q.setsize(self, self.mins, self.maxs);
+    q.setorigin(self, self.origin);
 
     // start trains on the second frame, to make sure their targets have had
     // a chance to spawn
-    self.set(.nextthink, self.get(.ltime) + 0.1);
-    self.set(.think, q.func(func_train_find));
+    self.nextthink = self.ltime + 0.1;
+    self.think = q.func(func_train_find);
 }

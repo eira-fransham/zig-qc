@@ -94,7 +94,7 @@ pub fn t_movetarget() callconv(.c) void {
     if (q.other.get().get(q.movetarget).neq(q.me()))
         return;
 
-    if (!q.other.get().get(.enemy).isNull())
+    if (!q.other.get().enemy.isNull())
         return; // fighting, not following a path
 
     const temp = q.me();
@@ -103,13 +103,13 @@ pub fn t_movetarget() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
-    if (self.get(.classname).eql(S("monster_ogre")))
+    if (self.classname.eql(S("monster_ogre")))
         q.sound(self, q.CHAN_VOICE, S("ogre/ogdrag.wav"), 1, q.ATTN_IDLE); // play chainsaw drag sound
 
     //dprint ("t_movetarget\n");
-    self.set(q.movetarget, q.find(q.world.get(), .targetname, other.get(.target)));
-    self.set(.goalentity, self.get(q.movetarget));
-    self.set(.ideal_yaw, q.vectoyaw(self.get(.goalentity).get(.origin) - self.get(.origin)));
+    self.set(q.movetarget, q.find(q.world.get(), .targetname, other.target));
+    self.goalentity = self.get(q.movetarget);
+    self.ideal_yaw = q.vectoyaw(@as(q.Vector, self.goalentity.origin) - self.origin);
     if (self.get(q.movetarget).isNull()) {
         self.set(q.pausetime, q.time.get() + 999999);
         self.get(q.th_stand)();
@@ -119,11 +119,11 @@ pub fn t_movetarget() callconv(.c) void {
 
 pub fn movetarget_f() callconv(.c) void {
     const self = q.me();
-    if (self.get(.targetname).isNull())
+    if (self.targetname.isNull())
         q.objerror(S("monster_movetarget: no targetname"));
 
-    self.set(.solid, q.SOLID_TRIGGER);
-    self.set(.touch, q.func(t_movetarget));
+    self.solid = q.SOLID_TRIGGER;
+    self.touch = q.func(t_movetarget);
     q.setsize(self, q.vec(-8, -8, -8), q.vec(8, 8, 8));
 }
 

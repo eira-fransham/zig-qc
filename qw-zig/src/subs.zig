@@ -24,16 +24,16 @@ pub fn SUB_Remove() callconv(.c) void {
 /// (Declared `vector()` in the original, but it never returns a value.)
 pub fn SetMovedir() callconv(.c) void {
     const self = q.me();
-    if (q.veq(self.get(.angles), q.vec(0, -1, 0))) {
-        self.set(.movedir, q.vec(0, 0, 1));
-    } else if (q.veq(self.get(.angles), q.vec(0, -2, 0))) {
-        self.set(.movedir, q.vec(0, 0, -1));
+    if (q.veq(self.angles, q.vec(0, -1, 0))) {
+        self.movedir = q.vec(0, 0, 1);
+    } else if (q.veq(self.angles, q.vec(0, -2, 0))) {
+        self.movedir = q.vec(0, 0, -1);
     } else {
-        q.makevectors(self.get(.angles));
-        self.set(.movedir, q.v_forward.get());
+        q.makevectors(self.angles);
+        self.movedir = q.v_forward.get();
     }
 
-    self.set(.angles, q.vec(0, 0, 0));
+    self.angles = q.vec(0, 0, 0);
 }
 
 /// InitTrigger
@@ -41,13 +41,13 @@ pub fn InitTrigger() callconv(.c) void {
     const self = q.me();
     // trigger angles are used for one-way touches.  An angle of 0 is assumed
     // to mean no restrictions, so use a yaw of 360 instead.
-    if (!q.veq(self.get(.angles), q.vec(0, 0, 0)))
+    if (!q.veq(self.angles, q.vec(0, 0, 0)))
         SetMovedir();
-    self.set(.solid, q.SOLID_TRIGGER);
-    q.setmodel(self, self.get(.model)); // set size and link into world
-    self.set(.movetype, q.MOVETYPE_NONE);
-    self.set(.modelindex, 0);
-    self.set(.model, S(""));
+    self.solid = q.SOLID_TRIGGER;
+    q.setmodel(self, self.model); // set size and link into world
+    self.movetype = q.MOVETYPE_NONE;
+    self.modelindex = 0;
+    self.model = S("");
 }
 
 /// SUB_CalcMove
@@ -70,16 +70,16 @@ pub fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) callconv(.c) v
 
     self.set(q.think1, func);
     self.set(q.finaldest, tdest);
-    self.set(.think, q.func(SUB_CalcMoveDone));
+    self.think = q.func(SUB_CalcMoveDone);
 
-    if (q.veq(tdest, self.get(.origin))) {
-        self.set(.velocity, q.vec(0, 0, 0));
-        self.set(.nextthink, self.get(.ltime) + 0.1);
+    if (q.veq(tdest, self.origin)) {
+        self.velocity = q.vec(0, 0, 0);
+        self.nextthink = self.ltime + 0.1;
         return;
     }
 
     // set destdelta to the vector needed to move
-    const vdestdelta = tdest - self.get(.origin);
+    const vdestdelta = tdest - self.origin;
 
     // calculate length of vector
     const len = q.vlen(vdestdelta);
@@ -91,18 +91,18 @@ pub fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) callconv(.c) v
         traveltime = 0.03;
 
     // set nextthink to trigger a think when dest is reached
-    self.set(.nextthink, self.get(.ltime) + traveltime);
+    self.nextthink = self.ltime + traveltime;
 
     // scale the destdelta vector by the time spent traveling to get velocity
-    self.set(.velocity, q.scale(vdestdelta, 1 / traveltime)); // qcc won't take vec/float
+    self.velocity = q.scale(vdestdelta, 1 / traveltime); // qcc won't take vec/float
 }
 
 /// After moving, set origin to exact final destination
 pub fn SUB_CalcMoveDone() callconv(.c) void {
     const self = q.me();
     q.setorigin(self, self.get(q.finaldest));
-    self.set(.velocity, q.vec(0, 0, 0));
-    self.set(.nextthink, -1);
+    self.velocity = q.vec(0, 0, 0);
+    self.nextthink = -1;
     if (!q.fnIsNull(self.get(q.think1)))
         self.get(q.think1)();
 }
@@ -127,7 +127,7 @@ pub fn SUB_CalcAngleMove(destangle: Vector, tspeed: f32, func: q.Function) callc
         q.objerror(S("No speed is defined!"));
 
     // set destdelta to the vector needed to move
-    const destdelta = destangle - self.get(.angles);
+    const destdelta = destangle - self.angles;
 
     // calculate length of vector
     const len = q.vlen(destdelta);
@@ -136,22 +136,22 @@ pub fn SUB_CalcAngleMove(destangle: Vector, tspeed: f32, func: q.Function) callc
     const traveltime = len / tspeed;
 
     // set nextthink to trigger a think when dest is reached
-    self.set(.nextthink, self.get(.ltime) + traveltime);
+    self.nextthink = self.ltime + traveltime;
 
     // scale the destdelta vector by the time spent traveling to get velocity
-    self.set(.avelocity, q.scale(destdelta, 1 / traveltime));
+    self.avelocity = q.scale(destdelta, 1 / traveltime);
 
     self.set(q.think1, func);
     self.set(q.finalangle, destangle);
-    self.set(.think, q.func(SUB_CalcAngleMoveDone));
+    self.think = q.func(SUB_CalcAngleMoveDone);
 }
 
 /// After rotating, set angle to exact final angle
 pub fn SUB_CalcAngleMoveDone() callconv(.c) void {
     const self = q.me();
-    self.set(.angles, self.get(q.finalangle));
-    self.set(.avelocity, q.vec(0, 0, 0));
-    self.set(.nextthink, -1);
+    self.angles = self.get(q.finalangle);
+    self.avelocity = q.vec(0, 0, 0);
+    self.nextthink = -1;
     if (!q.fnIsNull(self.get(q.think1)))
         self.get(q.think1)();
 }
@@ -160,7 +160,7 @@ pub fn SUB_CalcAngleMoveDone() callconv(.c) void {
 
 pub fn DelayThink() callconv(.c) void {
     const self = q.me();
-    q.activator.set(self.get(.enemy));
+    q.activator.set(self.enemy);
     SUB_UseTargets();
     q.remove(self);
 }
@@ -189,13 +189,13 @@ pub fn SUB_UseTargets() callconv(.c) void {
     if (self.get(q.delay) != 0) {
         // create a temp object to fire at a later time
         const t = q.spawn();
-        t.set(.classname, S("DelayedUse"));
-        t.set(.nextthink, q.time.get() + self.get(q.delay));
-        t.set(.think, q.func(DelayThink));
-        t.set(.enemy, q.activator.get());
-        t.set(.message, self.get(.message));
+        t.classname = S("DelayedUse");
+        t.nextthink = q.time.get() + self.get(q.delay);
+        t.think = q.func(DelayThink);
+        t.enemy = q.activator.get();
+        t.message = self.message;
         t.set(q.killtarget, self.get(q.killtarget));
-        t.set(.target, self.get(.target));
+        t.target = self.target;
         return;
     }
 
@@ -203,9 +203,9 @@ pub fn SUB_UseTargets() callconv(.c) void {
     // print the message
     //
     const activator = q.activator.get();
-    if (activator.get(.classname).eql(S("player")) and self.get(.message).neq(S(""))) {
-        q.centerprint(activator, self.get(.message));
-        if (self.get(.noise).isNull())
+    if (activator.classname.eql(S("player")) and self.message.neq(S(""))) {
+        q.centerprint(activator, self.message);
+        if (self.noise.isNull())
             q.sound(activator, q.CHAN_VOICE, S("misc/talk.wav"), 1, q.ATTN_NORM);
     }
 
@@ -225,11 +225,11 @@ pub fn SUB_UseTargets() callconv(.c) void {
     //
     // fire targets
     //
-    if (!self.get(.target).isNull()) {
+    if (!self.target.isNull()) {
         const act = q.activator.get();
         var t = q.world.get();
         while (true) {
-            t = q.find(t, .targetname, self.get(.target));
+            t = q.find(t, .targetname, self.target);
             if (t.isNull()) {
                 return;
             }
@@ -237,9 +237,9 @@ pub fn SUB_UseTargets() callconv(.c) void {
             const otemp = q.other.get();
             q.self.set(t);
             q.other.set(stemp);
-            if (q.fnNeq(t.get(.use), q.func(SUB_Null))) {
-                if (!q.fnIsNull(t.get(.use)))
-                    t.get(.use)();
+            if (q.fnNeq(t.use, q.func(SUB_Null))) {
+                if (!q.fnIsNull(t.use))
+                    t.use();
             }
             q.self.set(stemp);
             q.other.set(otemp);

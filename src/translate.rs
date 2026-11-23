@@ -240,6 +240,10 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             }
             crate::prepare::simplify_params(body);
             crate::prepare::merge_blocks(body);
+            crate::prepare::split_i64_moves(body);
+            crate::prepare::split_splat_loads(body);
+            crate::prepare::duplicate_offset_blocks(body);
+            crate::prepare::narrow_extended_lanes(body);
             crate::prepare::float_sign_tests(body);
             crate::prepare::bool_offsets_to_select(body);
         }

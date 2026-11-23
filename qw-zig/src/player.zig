@@ -237,21 +237,21 @@ test "frame numbers" {
 pub fn player_stand1() callconv(.c) void {
     state(.axstnd1, player_stand1);
     const self = q.me();
-    self.set(.weaponframe, 0);
-    if (self.get(.velocity)[0] != 0 or self.get(.velocity)[1] != 0) {
+    self.weaponframe = 0;
+    if (self.velocity[0] != 0 or self.velocity[1] != 0) {
         self.set(q.walkframe, 0);
         player_run();
         return;
     }
 
-    if (self.get(.weapon) == q.IT_AXE) {
+    if (self.weapon == q.IT_AXE) {
         if (self.get(q.walkframe) >= 12)
             self.set(q.walkframe, 0);
-        self.set(.frame, fr(.axstnd1) + self.get(q.walkframe));
+        self.frame = fr(.axstnd1) + self.get(q.walkframe);
     } else {
         if (self.get(q.walkframe) >= 5)
             self.set(q.walkframe, 0);
-        self.set(.frame, fr(.stand1) + self.get(q.walkframe));
+        self.frame = fr(.stand1) + self.get(q.walkframe);
     }
     self.set(q.walkframe, self.get(q.walkframe) + 1);
 }
@@ -259,22 +259,22 @@ pub fn player_stand1() callconv(.c) void {
 pub fn player_run() callconv(.c) void {
     state(.rockrun1, player_run);
     const self = q.me();
-    self.set(.weaponframe, 0);
-    if (self.get(.velocity)[0] == 0 and self.get(.velocity)[1] == 0) {
+    self.weaponframe = 0;
+    if (self.velocity[0] == 0 and self.velocity[1] == 0) {
         self.set(q.walkframe, 0);
         player_stand1();
         return;
     }
 
-    if (self.get(.weapon) == q.IT_AXE) {
+    if (self.weapon == q.IT_AXE) {
         if (self.get(q.walkframe) == 6)
             self.set(q.walkframe, 0);
-        self.set(.frame, fr(.axrun1) + self.get(q.walkframe));
+        self.frame = fr(.axrun1) + self.get(q.walkframe);
     } else {
         if (self.get(q.walkframe) == 6)
             self.set(q.walkframe, 0);
         // (`self.frame` here is `$rockrun1`, set by the state prefix.)
-        self.set(.frame, self.get(.frame) + self.get(q.walkframe));
+        self.frame = self.frame + self.get(q.walkframe);
     }
     self.set(q.walkframe, self.get(q.walkframe) + 1);
 }
@@ -283,11 +283,11 @@ pub fn muzzleflash() callconv(.c) void {
     const self = q.me();
     q.WriteByte(q.MSG_MULTICAST, q.SVC_MUZZLEFLASH);
     q.WriteEntity(q.MSG_MULTICAST, self);
-    q.multicast(self.get(.origin), q.MULTICAST_PVS);
+    q.multicast(self.origin, q.MULTICAST_PVS);
 }
 
 inline fn weaponframe(f: f32) void {
-    q.me().set(.weaponframe, f);
+    q.me().weaponframe = f;
 }
 
 pub fn player_shot1() callconv(.c) void {
@@ -395,13 +395,13 @@ pub fn player_nail1() callconv(.c) void {
     const self = q.me();
     muzzleflash();
 
-    if (self.get(.button0) == 0 or client.intermission_running.get() != 0 or self.get(.impulse) != 0) {
+    if (self.button0 == 0 or client.intermission_running.get() != 0 or self.impulse != 0) {
         player_run();
         return;
     }
-    self.set(.weaponframe, self.get(.weaponframe) + 1);
-    if (self.get(.weaponframe) == 9)
-        self.set(.weaponframe, 1);
+    self.weaponframe = self.weaponframe + 1;
+    if (self.weaponframe == 9)
+        self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireSpikes(4);
     self.set(q.attack_finished, q.time.get() + 0.2);
@@ -411,13 +411,13 @@ pub fn player_nail2() callconv(.c) void {
     const self = q.me();
     muzzleflash();
 
-    if (self.get(.button0) == 0 or client.intermission_running.get() != 0 or self.get(.impulse) != 0) {
+    if (self.button0 == 0 or client.intermission_running.get() != 0 or self.impulse != 0) {
         player_run();
         return;
     }
-    self.set(.weaponframe, self.get(.weaponframe) + 1);
-    if (self.get(.weaponframe) == 9)
-        self.set(.weaponframe, 1);
+    self.weaponframe = self.weaponframe + 1;
+    if (self.weaponframe == 9)
+        self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireSpikes(-4);
     self.set(q.attack_finished, q.time.get() + 0.2);
@@ -430,13 +430,13 @@ pub fn player_light1() callconv(.c) void {
     const self = q.me();
     muzzleflash();
 
-    if (self.get(.button0) == 0 or client.intermission_running.get() != 0) {
+    if (self.button0 == 0 or client.intermission_running.get() != 0) {
         player_run();
         return;
     }
-    self.set(.weaponframe, self.get(.weaponframe) + 1);
-    if (self.get(.weaponframe) == 5)
-        self.set(.weaponframe, 1);
+    self.weaponframe = self.weaponframe + 1;
+    if (self.weaponframe == 5)
+        self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireLightning();
     self.set(q.attack_finished, q.time.get() + 0.2);
@@ -446,13 +446,13 @@ pub fn player_light2() callconv(.c) void {
     const self = q.me();
     muzzleflash();
 
-    if (self.get(.button0) == 0 or client.intermission_running.get() != 0) {
+    if (self.button0 == 0 or client.intermission_running.get() != 0) {
         player_run();
         return;
     }
-    self.set(.weaponframe, self.get(.weaponframe) + 1);
-    if (self.get(.weaponframe) == 5)
-        self.set(.weaponframe, 1);
+    self.weaponframe = self.weaponframe + 1;
+    if (self.weaponframe == 5)
+        self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireLightning();
     self.set(q.attack_finished, q.time.get() + 0.2);
@@ -489,16 +489,16 @@ pub fn player_rocket6() callconv(.c) void {
 pub fn PainSound() callconv(.c) void {
     const self = q.me();
 
-    if (self.get(.health) < 0)
+    if (self.health < 0)
         return;
 
-    if (q.damage_attacker.get().get(.classname).eql(S("teledeath"))) {
+    if (q.damage_attacker.get().classname.eql(S("teledeath"))) {
         q.sound(self, q.CHAN_VOICE, S("player/teledth1.wav"), 1, q.ATTN_NONE);
         return;
     }
 
     // water pain sounds
-    if (self.get(.watertype) == q.CONTENT_WATER and self.get(.waterlevel) == 3) {
+    if (self.watertype == q.CONTENT_WATER and self.waterlevel == 3) {
         DeathBubbles(1);
         if (q.random() > 0.5) {
             q.sound(self, q.CHAN_VOICE, S("player/drown1.wav"), 1, q.ATTN_NORM);
@@ -509,7 +509,7 @@ pub fn PainSound() callconv(.c) void {
     }
 
     // slime pain sounds
-    if (self.get(.watertype) == q.CONTENT_SLIME) {
+    if (self.watertype == q.CONTENT_SLIME) {
         // FIX ME       put in some steam here
         if (q.random() > 0.5) {
             q.sound(self, q.CHAN_VOICE, S("player/lburn1.wav"), 1, q.ATTN_NORM);
@@ -519,7 +519,7 @@ pub fn PainSound() callconv(.c) void {
         return;
     }
 
-    if (self.get(.watertype) == q.CONTENT_LAVA) {
+    if (self.watertype == q.CONTENT_LAVA) {
         if (q.random() > 0.5) {
             q.sound(self, q.CHAN_VOICE, S("player/lburn1.wav"), 1, q.ATTN_NORM);
         } else {
@@ -545,22 +545,22 @@ pub fn PainSound() callconv(.c) void {
 
     const rs = q.rint((q.random() * 5) + 1);
 
-    self.set(.noise, S(""));
+    self.noise = S("");
     if (rs == 1) {
-        self.set(.noise, S("player/pain1.wav"));
+        self.noise = S("player/pain1.wav");
     } else if (rs == 2) {
-        self.set(.noise, S("player/pain2.wav"));
+        self.noise = S("player/pain2.wav");
     } else if (rs == 3) {
-        self.set(.noise, S("player/pain3.wav"));
+        self.noise = S("player/pain3.wav");
     } else if (rs == 4) {
-        self.set(.noise, S("player/pain4.wav"));
+        self.noise = S("player/pain4.wav");
     } else if (rs == 5) {
-        self.set(.noise, S("player/pain5.wav"));
+        self.noise = S("player/pain5.wav");
     } else {
-        self.set(.noise, S("player/pain6.wav"));
+        self.noise = S("player/pain6.wav");
     }
 
-    q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NORM);
+    q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     return;
 }
 
@@ -608,13 +608,13 @@ pub fn player_axpain6() callconv(.c) void {
 
 pub fn player_pain() callconv(.c) void {
     const self = q.me();
-    if (self.get(.weaponframe) != 0)
+    if (self.weaponframe != 0)
         return;
 
     if (self.get(q.invisible_finished) > q.time.get())
         return; // eyes don't have pain frames
 
-    if (self.get(.weapon) == q.IT_AXE) {
+    if (self.weapon == q.IT_AXE) {
         player_axpain1();
     } else {
         player_pain1();
@@ -623,23 +623,23 @@ pub fn player_pain() callconv(.c) void {
 
 pub fn DeathBubblesSpawn() callconv(.c) void {
     const self = q.me();
-    const owner = self.get(.owner);
-    if (owner.get(.waterlevel) != 3)
+    const owner = self.owner;
+    if (owner.waterlevel != 3)
         return;
     const bubble = q.spawn();
     q.setmodel(bubble, S("progs/s_bubble.spr"));
-    q.setorigin(bubble, owner.get(.origin) + q.vec(0, 0, 24));
-    bubble.set(.movetype, q.MOVETYPE_NOCLIP);
-    bubble.set(.solid, q.SOLID_NOT);
-    bubble.set(.velocity, q.vec(0, 0, 15));
-    bubble.set(.nextthink, q.time.get() + 0.5);
-    bubble.set(.think, q.func(misc.bubble_bob));
-    bubble.set(.classname, S("bubble"));
-    bubble.set(.frame, 0);
+    q.setorigin(bubble, owner.origin + q.vec(0, 0, 24));
+    bubble.movetype = q.MOVETYPE_NOCLIP;
+    bubble.solid = q.SOLID_NOT;
+    bubble.velocity = q.vec(0, 0, 15);
+    bubble.nextthink = q.time.get() + 0.5;
+    bubble.think = q.func(misc.bubble_bob);
+    bubble.classname = S("bubble");
+    bubble.frame = 0;
     bubble.set(q.cnt, 0);
     q.setsize(bubble, q.vec(-8, -8, -8), q.vec(8, 8, 8));
-    self.set(.nextthink, q.time.get() + 0.1);
-    self.set(.think, q.func(DeathBubblesSpawn));
+    self.nextthink = q.time.get() + 0.1;
+    self.think = q.func(DeathBubblesSpawn);
     self.set(q.air_finished, self.get(q.air_finished) + 1);
     if (self.get(q.air_finished) >= self.get(q.bubble_count))
         q.remove(self);
@@ -649,13 +649,13 @@ pub fn DeathBubbles(num_bubbles: f32) callconv(.c) void {
     const self = q.me();
 
     const bubble_spawner = q.spawn();
-    q.setorigin(bubble_spawner, self.get(.origin));
-    bubble_spawner.set(.movetype, q.MOVETYPE_NONE);
-    bubble_spawner.set(.solid, q.SOLID_NOT);
-    bubble_spawner.set(.nextthink, q.time.get() + 0.1);
-    bubble_spawner.set(.think, q.func(DeathBubblesSpawn));
+    q.setorigin(bubble_spawner, self.origin);
+    bubble_spawner.movetype = q.MOVETYPE_NONE;
+    bubble_spawner.solid = q.SOLID_NOT;
+    bubble_spawner.nextthink = q.time.get() + 0.1;
+    bubble_spawner.think = q.func(DeathBubblesSpawn);
     bubble_spawner.set(q.air_finished, 0);
-    bubble_spawner.set(.owner, self);
+    bubble_spawner.owner = self;
     bubble_spawner.set(q.bubble_count, num_bubbles);
     return;
 }
@@ -664,7 +664,7 @@ pub fn DeathSound() callconv(.c) void {
     const self = q.me();
 
     // water death sounds
-    if (self.get(.waterlevel) == 3) {
+    if (self.waterlevel == 3) {
         DeathBubbles(5);
         q.sound(self, q.CHAN_VOICE, S("player/h2odeath.wav"), 1, q.ATTN_NONE);
         return;
@@ -672,25 +672,25 @@ pub fn DeathSound() callconv(.c) void {
 
     const rs = q.rint((q.random() * 4) + 1);
     if (rs == 1)
-        self.set(.noise, S("player/death1.wav"));
+        self.noise = S("player/death1.wav");
     if (rs == 2)
-        self.set(.noise, S("player/death2.wav"));
+        self.noise = S("player/death2.wav");
     if (rs == 3)
-        self.set(.noise, S("player/death3.wav"));
+        self.noise = S("player/death3.wav");
     if (rs == 4)
-        self.set(.noise, S("player/death4.wav"));
+        self.noise = S("player/death4.wav");
     if (rs == 5)
-        self.set(.noise, S("player/death5.wav"));
+        self.noise = S("player/death5.wav");
 
-    q.sound(self, q.CHAN_VOICE, self.get(.noise), 1, q.ATTN_NONE);
+    q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NONE);
     return;
 }
 
 pub fn PlayerDead() callconv(.c) void {
     const self = q.me();
-    self.set(.nextthink, -1);
+    self.nextthink = -1;
     // allow respawn after a certain time
-    self.set(.deadflag, q.DEAD_DEAD);
+    self.deadflag = q.DEAD_DEAD;
 }
 
 pub fn VelocityForDamage(dm: f32) callconv(.c) Vector {
@@ -698,9 +698,9 @@ pub fn VelocityForDamage(dm: f32) callconv(.c) Vector {
     const inflictor = q.damage_inflictor.get();
     var v = q.vec(0, 0, 0);
 
-    if (q.vlen(inflictor.get(.velocity)) > 0) {
-        v = q.scale(inflictor.get(.velocity), 0.5);
-        v = v + q.scale(q.normalize(self.get(.origin) - inflictor.get(.origin)), 25);
+    if (q.vlen(inflictor.velocity) > 0) {
+        v = q.scale(inflictor.velocity, 0.5);
+        v = v + q.scale(q.normalize(@as(Vector, self.origin) - inflictor.origin), 25);
         v[2] = 100 + 240 * q.random();
         v[0] = v[0] + (200 * weapons.crandom());
         v[1] = v[1] + (200 * weapons.crandom());
@@ -732,53 +732,53 @@ pub fn ThrowGib(gibname: String, dm: f32) callconv(.c) void {
     const self = q.me();
 
     const new = q.spawn();
-    new.set(.origin, self.get(.origin));
+    new.origin = self.origin;
     q.setmodel(new, gibname);
     q.setsize(new, q.vec(0, 0, 0), q.vec(0, 0, 0));
-    new.set(.velocity, VelocityForDamage(dm));
-    new.set(.movetype, q.MOVETYPE_BOUNCE);
-    new.set(.solid, q.SOLID_NOT);
-    new.set(.avelocity, q.vec(q.random() * 600, q.random() * 600, q.random() * 600));
-    new.set(.think, q.func(subs.SUB_Remove));
-    new.set(.ltime, q.time.get());
-    new.set(.nextthink, q.time.get() + 10 + q.random() * 10);
-    new.set(.frame, 0);
-    new.set(.flags, 0);
+    new.velocity = VelocityForDamage(dm);
+    new.movetype = q.MOVETYPE_BOUNCE;
+    new.solid = q.SOLID_NOT;
+    new.avelocity = q.vec(q.random() * 600, q.random() * 600, q.random() * 600);
+    new.think = q.func(subs.SUB_Remove);
+    new.ltime = q.time.get();
+    new.nextthink = q.time.get() + 10 + q.random() * 10;
+    new.frame = 0;
+    new.flags = 0;
 }
 
 pub fn ThrowHead(gibname: String, dm: f32) callconv(.c) void {
     const self = q.me();
     q.setmodel(self, gibname);
-    self.set(.frame, 0);
-    self.set(.nextthink, -1);
-    self.set(.movetype, q.MOVETYPE_BOUNCE);
-    self.set(.takedamage, q.DAMAGE_NO);
-    self.set(.solid, q.SOLID_NOT);
-    self.set(.view_ofs, q.vec(0, 0, 8));
+    self.frame = 0;
+    self.nextthink = -1;
+    self.movetype = q.MOVETYPE_BOUNCE;
+    self.takedamage = q.DAMAGE_NO;
+    self.solid = q.SOLID_NOT;
+    self.view_ofs = q.vec(0, 0, 8);
     q.setsize(self, q.vec(-16, -16, 0), q.vec(16, 16, 56));
-    self.set(.velocity, VelocityForDamage(dm));
-    var origin = self.get(.origin);
+    self.velocity = VelocityForDamage(dm);
+    var origin = self.origin;
     origin[2] = origin[2] - 24;
-    self.set(.origin, origin);
-    self.set(.flags, self.get(.flags) - q.band(self.get(.flags), q.FL_ONGROUND));
-    self.set(.avelocity, q.scale(q.vec(0, 600, 0), weapons.crandom()));
+    self.origin = origin;
+    self.flags = self.flags - q.band(self.flags, q.FL_ONGROUND);
+    self.avelocity = q.scale(q.vec(0, 600, 0), weapons.crandom());
 }
 
 pub fn GibPlayer() callconv(.c) void {
     const self = q.me();
-    ThrowHead(S("progs/h_player.mdl"), self.get(.health));
-    ThrowGib(S("progs/gib1.mdl"), self.get(.health));
-    ThrowGib(S("progs/gib2.mdl"), self.get(.health));
-    ThrowGib(S("progs/gib3.mdl"), self.get(.health));
+    ThrowHead(S("progs/h_player.mdl"), self.health);
+    ThrowGib(S("progs/gib1.mdl"), self.health);
+    ThrowGib(S("progs/gib2.mdl"), self.health);
+    ThrowGib(S("progs/gib3.mdl"), self.health);
 
-    self.set(.deadflag, q.DEAD_DEAD);
+    self.deadflag = q.DEAD_DEAD;
 
-    if (q.damage_attacker.get().get(.classname).eql(S("teledeath"))) {
+    if (q.damage_attacker.get().classname.eql(S("teledeath"))) {
         q.sound(self, q.CHAN_VOICE, S("player/teledth1.wav"), 1, q.ATTN_NONE);
         return;
     }
 
-    if (q.damage_attacker.get().get(.classname).eql(S("teledeath2"))) {
+    if (q.damage_attacker.get().classname.eql(S("teledeath2"))) {
         q.sound(self, q.CHAN_VOICE, S("player/teledth1.wav"), 1, q.ATTN_NONE);
         return;
     }
@@ -792,12 +792,12 @@ pub fn GibPlayer() callconv(.c) void {
 
 pub fn PlayerDie() callconv(.c) void {
     const self = q.me();
-    self.set(.items, self.get(.items) - q.band(self.get(.items), q.IT_INVISIBILITY));
+    self.items = self.items - q.band(self.items, q.IT_INVISIBILITY);
 
     if (q.stof(q.infokey(q.world.get(), S("dq"))) != 0) {
         if (self.get(q.super_damage_finished) > 0) {
             items.DropQuad(self.get(q.super_damage_finished) - q.time.get());
-            q.bprint(q.PRINT_LOW, self.get(.netname));
+            q.bprint(q.PRINT_LOW, self.netname);
             if (q.deathmatch.get() == 4) {
                 q.bprint(q.PRINT_LOW, S(" lost an OctaPower with "));
             } else {
@@ -811,7 +811,7 @@ pub fn PlayerDie() callconv(.c) void {
 
     if (q.stof(q.infokey(q.world.get(), S("dr"))) != 0) {
         if (self.get(q.invisible_finished) > 0) {
-            q.bprint(q.PRINT_LOW, self.get(.netname));
+            q.bprint(q.PRINT_LOW, self.netname);
             q.bprint(q.PRINT_LOW, S(" lost a ring with "));
             const s = q.ftos(q.rint(self.get(q.invisible_finished) - q.time.get()));
             q.bprint(q.PRINT_LOW, s);
@@ -824,35 +824,35 @@ pub fn PlayerDie() callconv(.c) void {
     self.set(q.invincible_finished, 0);
     self.set(q.super_damage_finished, 0);
     self.set(q.radsuit_finished, 0);
-    self.set(.modelindex, client.modelindex_player.get()); // don't use eyes
+    self.modelindex = client.modelindex_player.get(); // don't use eyes
 
     items.DropBackpack();
 
-    self.set(.weaponmodel, S(""));
-    self.set(.view_ofs, q.vec(0, 0, -8));
-    self.set(.deadflag, q.DEAD_DYING);
-    self.set(.solid, q.SOLID_NOT);
-    self.set(.flags, self.get(.flags) - q.band(self.get(.flags), q.FL_ONGROUND));
-    self.set(.movetype, q.MOVETYPE_TOSS);
-    if (self.get(.velocity)[2] < 10) {
-        var v = self.get(.velocity);
+    self.weaponmodel = S("");
+    self.view_ofs = q.vec(0, 0, -8);
+    self.deadflag = q.DEAD_DYING;
+    self.solid = q.SOLID_NOT;
+    self.flags = self.flags - q.band(self.flags, q.FL_ONGROUND);
+    self.movetype = q.MOVETYPE_TOSS;
+    if (self.velocity[2] < 10) {
+        var v = self.velocity;
         v[2] = v[2] + q.random() * 300;
-        self.set(.velocity, v);
+        self.velocity = v;
     }
 
-    if (self.get(.health) < -40) {
+    if (self.health < -40) {
         GibPlayer();
         return;
     }
 
     DeathSound();
 
-    var angles = self.get(.angles);
+    var angles = self.angles;
     angles[0] = 0;
     angles[2] = 0;
-    self.set(.angles, angles);
+    self.angles = angles;
 
-    if (self.get(.weapon) == q.IT_AXE) {
+    if (self.weapon == q.IT_AXE) {
         player_die_ax1();
         return;
     }
@@ -877,13 +877,13 @@ pub fn PlayerDie() callconv(.c) void {
 pub fn set_suicide_frame() callconv(.c) void {
     // used by klill command and diconnect command
     const self = q.me();
-    if (self.get(.model).neq(S("progs/player.mdl")))
+    if (self.model.neq(S("progs/player.mdl")))
         return; // allready gibbed
-    self.set(.frame, fr(.deatha11));
-    self.set(.solid, q.SOLID_NOT);
-    self.set(.movetype, q.MOVETYPE_TOSS);
-    self.set(.deadflag, q.DEAD_DEAD);
-    self.set(.nextthink, -1);
+    self.frame = fr(.deatha11);
+    self.solid = q.SOLID_NOT;
+    self.movetype = q.MOVETYPE_TOSS;
+    self.deadflag = q.DEAD_DEAD;
+    self.nextthink = -1;
 }
 
 pub fn player_diea1() callconv(.c) void {
