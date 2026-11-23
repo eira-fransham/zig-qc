@@ -296,6 +296,27 @@ fn stress_sundays_on_first() {
     }
 }
 
+/// `tests/fixtures/control_flow.wat`: loops, `if`s and `br_table`s, with
+/// blocks nested in their predecessors' `if`s and `switch` arms (`pick`
+/// calls builtins, which `run-qc` doesn't support).
+#[test]
+fn fixture_control_flow() {
+    let Some(progs) = fixture_progs("control_flow.wat") else {
+        return;
+    };
+    let check = |func, args: &[f32], expected| check_in(&progs, func, args, None, expected);
+    check("sum", &[4.0], 6.0);
+    for (x, r) in [(0.0, 10.0), (1.0, 20.0), (2.0, 30.0), (7.0, 30.0)] {
+        check("classify", &[x], r);
+    }
+    for (x, r) in [(0, 0.5), (1, 20.5), (2, 2.5), (3, 30.5), (4, 20.5), (5, 30.5), (9, 30.5)] {
+        check("table_join", &[x as f32], r);
+    }
+    for (x, r) in [(-1.0, 1.0), (5.0, 2.0), (11.0, 12.0)] {
+        check("two_ifs", &[x], r);
+    }
+}
+
 /// `tests/fixtures/integers.wat`: integer division and remainder, bit tests,
 /// and `i32x4` counters and masks.
 #[test]

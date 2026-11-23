@@ -1,7 +1,10 @@
 //! Emission of one function instance from SSA form to QuakeC.
 //!
 //! Blocks are laid out in reverse postorder, each starting with a label (kept
-//! only if something jumps to it). Block parameters are QuakeC locals,
+//! only if something jumps to it), except that a block with a single
+//! incoming edge (see [`nested_blocks`]) is emitted inside its predecessor's
+//! terminator: in a branch of its `if` or an arm of its `switch`, or straight
+//! after an unconditional branch. Block parameters are QuakeC locals,
 //! assigned on each incoming edge. Values with a single use in the same
 //! block are inlined into that use, unless a side effect in between could
 //! change what they read; other values are assigned to a local. Calls are
@@ -53,6 +56,8 @@ struct Emitter<'a, 'm> {
     bit_tests: HashSet<Value>,
     /// Block parameters known to be non-negative (see [`nonneg`]).
     nonneg: HashSet<Value>,
+    /// Blocks emitted inside their only predecessor (see [`nested_blocks`]).
+    nested: HashSet<Block>,
 }
 
 /// An edge copy: destination, plain source local, locals read.
@@ -99,6 +104,7 @@ pub fn emit(
         in_term: false,
         bit_tests: HashSet::new(),
         nonneg: HashSet::new(),
+        nested: HashSet::new(),
     };
     let f = e.function()?;
     Ok(((inst.func, i), f))
@@ -110,6 +116,7 @@ impl Emitter<'_, '_> {
         self.check_entities()?;
         self.count_uses();
         let order = rpo(body);
+        self.nested = nested_blocks(body, &order);
 
         let sig = &self.sigs[&self.inst.name];
         let mut params = Vec::new();
@@ -130,25 +137,14 @@ impl Emitter<'_, '_> {
             }
         }
 
-        for (i, &b) in order.iter().enumerate() {
-            self.block = b;
-            self.in_term = false;
+        let top: Vec<Block> = order
+            .iter()
+            .copied()
+            .filter(|b| !self.nested.contains(b))
+            .collect();
+        for (i, &b) in top.iter().enumerate() {
             self.out.push(Stmt::Label(label(b)));
-            for &v in &body.blocks[b].insts {
-                if const_val(body, v).is_some() || const_expr(body, v).is_some() {
-                    continue;
-                }
-                self.inst(v)
-                    .with_context(|| format!("at {v} = {} (in {b})", infer::describe(body, v)))?;
-            }
-            let next = order.get(i + 1).copied();
-            self.in_term = true;
-            self.terminator(b, next)
-                .with_context(|| format!("at the end of {b}"))?;
-            ensure!(
-                self.pending.is_empty(),
-                "values left unused at the end of {b}"
-            );
+            self.block(b, top.get(i + 1).copied())?;
         }
 
         // Only keep labels that are jumped to.
@@ -169,6 +165,43 @@ impl Emitter<'_, '_> {
             locals,
             body: body_stmts,
         })
+    }
+
+    /// Emit block `b` (its instructions, then its terminator, which emits
+    /// the blocks nested in it). `next` is where control goes if it falls
+    /// off the end.
+    fn block(&mut self, b: Block, next: Option<Block>) -> Result<()> {
+        let body = self.body;
+        self.block = b;
+        self.in_term = false;
+        for &v in &body.blocks[b].insts {
+            if const_val(body, v).is_some() || const_expr(body, v).is_some() {
+                continue;
+            }
+            self.inst(v)
+                .with_context(|| format!("at {v} = {} (in {b})", infer::describe(body, v)))?;
+        }
+        self.in_term = true;
+        self.terminator(b, next)
+            .with_context(|| format!("at the end of {b}"))?;
+        ensure!(
+            self.pending.is_empty(),
+            "values left unused at the end of {b}"
+        );
+        Ok(())
+    }
+
+    /// The statements of nested block `b`, emitted inside the current
+    /// block's terminator.
+    fn nested_body(&mut self, b: Block, next: Option<Block>) -> Result<Vec<Stmt>> {
+        let saved = std::mem::take(&mut self.out);
+        let (block, in_term) = (self.block, self.in_term);
+        let r = self.block(b, next);
+        self.block = block;
+        self.in_term = in_term;
+        let stmts = std::mem::replace(&mut self.out, saved);
+        r?;
+        Ok(stmts)
     }
 
     /// Every entity value that isn't computed as `e + k` (a parameter, a
@@ -296,11 +329,22 @@ impl Emitter<'_, '_> {
                         walk(s, uses, defs);
                     }
                 }
-                Stmt::Return(None) | Stmt::Goto(_) | Stmt::Label(_) | Stmt::Comment(_) => {}
+                Stmt::Switch(x, arms, d) => {
+                    read(x, uses);
+                    for s in arms.iter().flat_map(|(_, b)| b).chain(d) {
+                        walk(s, uses, defs);
+                    }
+                }
+                Stmt::Return(None)
+                | Stmt::Break
+                | Stmt::Goto(_)
+                | Stmt::Label(_)
+                | Stmt::Comment(_) => {}
             }
         }
         // Outside terminators there are no `if`s, so uses come before the
-        // definition.
+        // definition. Terminators record only their edge copies, not the
+        // blocks nested in them (which record their own).
         walk(s, &mut uses, &mut defs);
         let rec = self.rec.entry(self.block).or_default();
         if self.in_term {
@@ -1445,7 +1489,8 @@ impl Emitter<'_, '_> {
             Terminator::Br { target } => {
                 let copies = self.edge(b, 0, target)?;
                 self.emit_all(copies);
-                self.jump(target.block, next);
+                let tail = self.tail(target.block, next)?;
+                self.out.extend(tail);
             }
             Terminator::CondBr {
                 cond,
@@ -1453,18 +1498,32 @@ impl Emitter<'_, '_> {
                 if_false,
             } => {
                 let c = self.operand(site, TERM_COND, *cond)?;
-                let t = self.edge(b, 0, if_true)?;
-                let f = self.edge(b, 1, if_false)?;
-                if t.is_empty() && Some(if_true.block) == next {
-                    let mut f = f;
-                    f.push(self.goto(if_false.block));
-                    self.emit(Stmt::If(not(c), f, vec![]));
+                let tc = self.edge(b, 0, if_true)?;
+                let fc = self.edge(b, 1, if_false)?;
+                self.record(&Stmt::If(c.clone(), tc.clone(), fc.clone()));
+                let mut t = tc;
+                t.extend(self.tail(if_true.block, next)?);
+                let mut f = fc;
+                f.extend(self.tail(if_false.block, next)?);
+                // Put the nested block first, unless only the other branch
+                // does anything.
+                let (c, t, f) = if t.is_empty()
+                    || (!self.nested.contains(&if_true.block)
+                        && self.nested.contains(&if_false.block)
+                        && !f.is_empty())
+                {
+                    (negate(c), f, t)
                 } else {
-                    let mut t = t;
-                    t.push(self.goto(if_true.block));
-                    self.emit(Stmt::If(c, t, vec![]));
-                    self.emit_all(f);
-                    self.jump(if_false.block, next);
+                    (c, t, f)
+                };
+                if t.is_empty() {
+                    // Both branches go to `next`.
+                } else if falls_through(&t) {
+                    self.out.push(Stmt::If(c, t, f));
+                } else {
+                    // No `else` is needed.
+                    self.out.push(Stmt::If(c, t, vec![]));
+                    self.out.extend(f);
                 }
             }
             Terminator::Select {
@@ -1474,19 +1533,55 @@ impl Emitter<'_, '_> {
             } => {
                 let idx = self.operand(site, TERM_COND, *value)?;
                 let idx = self.simple(idx, QcType::Float);
-                for (i, t) in ts.iter().enumerate() {
-                    let mut stmts = self.edge(b, i, t)?;
-                    stmts.push(self.goto(t.block));
-                    let cond = Expr::Bin(
-                        BinOp::Eq,
-                        Box::new(idx.clone()),
-                        Box::new(Expr::Float(i as f32)),
-                    );
-                    self.emit(Stmt::If(cond, stmts, vec![]));
+                let mut copies = Vec::new();
+                for (i, t) in ts.iter().chain([default]).enumerate() {
+                    copies.push(self.edge(b, i, t)?);
                 }
-                let copies = self.edge(b, ts.len(), default)?;
-                self.emit_all(copies);
-                self.jump(default.block, next);
+                let default_copies = copies.pop().expect("default edge");
+                // Group the cases by edge (see `nested_blocks`); those
+                // going where the default does are left to it.
+                let mut groups: Vec<(Vec<f32>, usize)> = Vec::new();
+                for (i, t) in ts.iter().enumerate() {
+                    if same_edge(t, default) {
+                        continue;
+                    }
+                    match groups.iter_mut().find(|(_, j)| same_edge(&ts[*j], t)) {
+                        Some((cases, _)) => cases.push(i as f32),
+                        None => groups.push((vec![i as f32], i)),
+                    }
+                }
+                self.record(&Stmt::Switch(
+                    idx.clone(),
+                    groups
+                        .iter()
+                        .map(|(cases, i)| (cases.clone(), copies[*i].clone()))
+                        .collect(),
+                    default_copies.clone(),
+                ));
+                let mut arms = Vec::new();
+                for (cases, i) in groups {
+                    let mut body = std::mem::take(&mut copies[i]);
+                    body.extend(self.tail(ts[i].block, next)?);
+                    if falls_through(&body) {
+                        body.push(Stmt::Break);
+                    }
+                    arms.push((cases, body));
+                }
+                let mut d = default_copies;
+                d.extend(self.tail(default.block, next)?);
+                if arms.is_empty() {
+                    self.out.extend(d);
+                } else if arms
+                    .iter()
+                    .any(|(_, body)| matches!(body.last(), Some(Stmt::Break)))
+                {
+                    self.out.push(Stmt::Switch(idx, arms, d));
+                } else {
+                    // No case leaves the `switch`, so the default can follow
+                    // it.
+                    self.out.push(Stmt::Switch(idx, arms, vec![]));
+                    self.out.extend(d);
+                }
             }
             Terminator::Return { values } => match values.as_slice() {
                 [] => self.emit(Stmt::Return(None)),
@@ -1517,12 +1612,56 @@ impl Emitter<'_, '_> {
         Stmt::Goto(l)
     }
 
-    /// Jump to `b`, unless it comes next.
-    fn jump(&mut self, b: Block, next: Option<Block>) {
-        if Some(b) != next {
-            let g = self.goto(b);
-            self.emit(g);
+    /// What follows an edge's copies to go to `b`, when control otherwise
+    /// continues at `next`: `b` itself if it's nested, else nothing if `b`
+    /// is `next`, else a `goto` (or what `b` returns, if that's all it does).
+    fn tail(&mut self, b: Block, next: Option<Block>) -> Result<Vec<Stmt>> {
+        if self.nested.contains(&b) {
+            return self.nested_body(b, next);
         }
+        if Some(b) == next {
+            return Ok(vec![]);
+        }
+        if let Some(r) = self.trivial_return(b)? {
+            return Ok(vec![r]);
+        }
+        Ok(vec![self.goto(b)])
+    }
+
+    /// The `return` of block `b`, if that's all it does: it has no
+    /// parameters and returns nothing or a constant.
+    fn trivial_return(&mut self, b: Block) -> Result<Option<Stmt>> {
+        let body = self.body;
+        let def = &body.blocks[b];
+        let Terminator::Return { values } = &def.terminator else {
+            return Ok(None);
+        };
+        let consts = def
+            .insts
+            .iter()
+            .all(|&v| const_val(body, v).is_some() || const_expr(body, v).is_some());
+        if !def.params.is_empty() || !consts {
+            return Ok(None);
+        }
+        Ok(match values.as_slice() {
+            [] => Some(Stmt::Return(None)),
+            &[x] => {
+                let x = body.resolve_alias(x);
+                if const_val(body, x).is_none() && const_expr(body, x).is_none() {
+                    return Ok(None);
+                }
+                match self.operand(Site::Term(b), term_ret(0), x)? {
+                    e @ (Expr::Float(_)
+                    | Expr::Null
+                    | Expr::Vector(_)
+                    | Expr::Str(_)
+                    | Expr::Global(_)
+                    | Expr::FuncName(_)) => Some(Stmt::Return(Some(e))),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
     }
 
     /// The assignments of the arguments of branch `t` (the `i`th target of
@@ -2024,15 +2163,31 @@ fn whole_field(v: Expr) -> Expr {
     v
 }
 
-/// Remove `x = x` assignments (left by sharing locals).
+/// Remove `x = x` assignments (left by sharing locals), and `if`s left with
+/// nothing to do in their `then` branch.
 fn remove_self_copies(stmts: &mut Vec<Stmt>) {
     stmts.retain(|s| !matches!(s, Stmt::Assign(Expr::Local(a), Expr::Local(b)) if a == b));
-    for s in stmts {
-        if let Stmt::If(_, t, e) = s {
-            remove_self_copies(t);
-            remove_self_copies(e);
+    for s in stmts.iter_mut() {
+        match s {
+            Stmt::If(c, t, e) => {
+                remove_self_copies(t);
+                remove_self_copies(e);
+                if t.is_empty() && !e.is_empty() {
+                    let c = std::mem::replace(c, Expr::Null);
+                    *s = Stmt::If(negate(c), std::mem::take(e), vec![]);
+                }
+            }
+            Stmt::Switch(_, arms, d) => {
+                for (_, body) in arms {
+                    remove_self_copies(body);
+                }
+                remove_self_copies(d);
+            }
+            _ => {}
         }
     }
+    // Conditions are pure.
+    stmts.retain(|s| !matches!(s, Stmt::If(_, t, e) if t.is_empty() && e.is_empty()));
 }
 
 fn label(b: Block) -> String {
@@ -2041,6 +2196,62 @@ fn label(b: Block) -> String {
 
 fn not(e: Expr) -> Expr {
     Expr::Un(UnOp::Not, Box::new(e))
+}
+
+/// The negation of a condition (only its truth matters).
+fn negate(e: Expr) -> Expr {
+    match e {
+        Expr::Un(UnOp::Not, x) => *x,
+        e => not(e),
+    }
+}
+
+/// Whether control can reach the end of `stmts`, which were built for one
+/// terminator (so they contain no labels, and a `break` only at the end of
+/// a `switch` arm).
+fn falls_through(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        None => true,
+        Some(Stmt::Return(_) | Stmt::Goto(_)) => false,
+        Some(Stmt::If(_, t, e)) => e.is_empty() || falls_through(t) || falls_through(e),
+        Some(Stmt::Switch(_, arms, d)) => {
+            d.is_empty()
+                || falls_through(d)
+                || arms
+                    .iter()
+                    .any(|(_, body)| matches!(body.last(), Some(Stmt::Break)))
+        }
+        Some(_) => true,
+    }
+}
+
+/// Whether two branch targets are the same edge: they go to the same block
+/// with the same arguments.
+fn same_edge(a: &waffle::BlockTarget, b: &waffle::BlockTarget) -> bool {
+    a.block == b.block && a.args == b.args
+}
+
+/// The blocks to emit inside their predecessor's terminator: those with a
+/// single incoming edge (counting a `br_table`'s identical edges, which
+/// become one `switch` arm, once), other than the entry and self-loops. The
+/// predecessor dominates such a block, so it's not a loop header.
+fn nested_blocks(body: &FunctionBody, order: &[Block]) -> HashSet<Block> {
+    let mut preds: HashMap<Block, (usize, Block)> = HashMap::new();
+    for &b in order {
+        let ts = targets(&body.blocks[b].terminator);
+        let select = matches!(body.blocks[b].terminator, Terminator::Select { .. });
+        for (i, t) in ts.iter().enumerate() {
+            if select && ts[..i].iter().any(|u| same_edge(u, t)) {
+                continue;
+            }
+            preds.entry(t.block).or_insert((0, b)).0 += 1;
+        }
+    }
+    preds
+        .into_iter()
+        .filter(|&(b, (n, p))| n == 1 && p != b && b != body.entry)
+        .map(|(b, _)| b)
+        .collect()
 }
 
 /// The blocks reachable from the entry, in reverse postorder.

@@ -433,6 +433,11 @@ pub enum Stmt {
     Expr(Expr),
     Return(Option<Expr>),
     If(Expr, Vec<Stmt>, Vec<Stmt>),
+    /// `switch (x) { case a: case b: ...; default: ...; }`: arms (their case
+    /// values and body) and the default body. Bodies don't fall into the
+    /// next arm: each ends in a `break`, `return` or `goto`.
+    Switch(Expr, Vec<(Vec<f32>, Vec<Stmt>)>, Vec<Stmt>),
+    Break,
     Goto(String),
     Label(String),
     Comment(String),
@@ -454,7 +459,17 @@ impl Stmt {
                     s.visit_locals_mut(f);
                 }
             }
-            Stmt::Return(None) | Stmt::Goto(_) | Stmt::Label(_) | Stmt::Comment(_) => {}
+            Stmt::Switch(x, arms, d) => {
+                x.visit_locals_mut(f);
+                for s in arms.iter_mut().flat_map(|(_, b)| b).chain(d) {
+                    s.visit_locals_mut(f);
+                }
+            }
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Goto(_)
+            | Stmt::Label(_)
+            | Stmt::Comment(_) => {}
         }
     }
 
@@ -499,6 +514,33 @@ impl Stmt {
                     }
                     let _ = writeln!(out, "{pad}}}");
                 }
+            }
+            Stmt::Switch(x, arms, d) => {
+                out.push_str(&pad);
+                out.push_str("switch (");
+                x.render(tv, out);
+                out.push_str(") {\n");
+                for (cases, body) in arms {
+                    for c in cases {
+                        out.push_str(&pad);
+                        out.push_str("case ");
+                        Expr::Float(*c).render(tv, out);
+                        out.push_str(":\n");
+                    }
+                    for s in body {
+                        s.render(tv, indent + 1, out);
+                    }
+                }
+                if !d.is_empty() {
+                    let _ = writeln!(out, "{pad}default:");
+                    for s in d {
+                        s.render(tv, indent + 1, out);
+                    }
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            Stmt::Break => {
+                let _ = writeln!(out, "{pad}break;");
             }
             Stmt::Goto(l) => {
                 let _ = writeln!(out, "{pad}goto {l};");

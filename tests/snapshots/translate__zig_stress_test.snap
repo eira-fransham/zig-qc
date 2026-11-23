@@ -81,27 +81,15 @@ void user_defs(entity p0) {
     p0.th_pain = ((void())__wasm_f47);
     on_done = __wasm_f46;
     if ((p0.think != __wasm_f44)) {
-        goto b2;
+        p0.nextthink = time;
     }
-    goto b4;
-b2:
-    p0.nextthink = time;
-b4:
     if (!(!(p0.th_pain))) {
-        goto b5;
+        ((void(entity, float))p0.th_pain)(activator, 5);
     }
-    goto b7;
-b5:
-    ((void(entity, float))p0.th_pain)(activator, 5);
-b7:
     l0 = find(world, classname, "info_player_start");
     if (!(!(l0))) {
-        goto b8;
+        p0.origin = l0.origin;
     }
-    goto b10;
-b8:
-    p0.origin = l0.origin;
-b10:
 }
 
 void __wasm_f46() {
@@ -124,63 +112,45 @@ float __wasm_f49(entity p0, float p1) {
 }
 
 void pick_field(entity p0, float p1) {
-    if ((p1 == 0)) {
-        goto b6;
-    }
-    if ((p1 == 1)) {
-        goto b5;
-    }
-    if ((p1 == 2)) {
-        goto b4;
-    }
-    if ((p1 == 3)) {
-        goto b3;
+    switch (p1) {
+    case 0:
+        p0.health = 10;
+        return;
+    case 1:
+        p0.frags = 20;
+        return;
+    case 2:
+        p0.armorvalue = 40;
+        return;
+    case 3:
+        p0.currentammo = 80;
+        return;
     }
     p0.nextthink = time;
-    return;
-b3:
-    p0.currentammo = 80;
-    return;
-b4:
-    p0.armorvalue = 40;
-    return;
-b5:
-    p0.frags = 20;
-    return;
-b6:
-    p0.health = 10;
 }
 
 float pick(float p0) {
     if (((p0 >= 0) & (p0 <= 3))) {
-        goto b2;
+        p0 = __wasm_data_f32((1048764 + (p0 * 4)));
+    } else {
+        p0 = 0;
     }
-    p0 = 0;
-    goto b4;
-b2:
-    p0 = __wasm_data_f32((1048764 + (p0 * 4)));
-b4:
     return p0;
 }
 
 float classify(float p0) {
     local float l0;
     if ((p0 < 0)) {
-        goto b3;
-    }
-    if ((p0 == 0)) {
+        l0 = (-1);
+    } else {
+        if (!((p0 == 0))) {
+            if ((p0 < 10)) {
+                return 1;
+            }
+            return 2;
+        }
         l0 = 0;
-        goto b2;
     }
-    if ((p0 < 10)) {
-        goto b7;
-    }
-    return 2;
-b7:
-    return 1;
-b3:
-    l0 = (-1);
-b2:
     return l0;
 }
 
@@ -191,13 +161,11 @@ float sum_to(float p0) {
     l1 = 0;
 b2:
     if ((p0 > l0)) {
-        goto b4;
+        l1 = (l0 + l1);
+        l0 = (l0 + 1);
+        goto b2;
     }
     return l1;
-b4:
-    l1 = (l0 + l1);
-    l0 = (l0 + 1);
-    goto b2;
 }
 
 entity builtins(string p0) {
@@ -217,12 +185,8 @@ entity builtins(string p0) {
     p0 = ftos((l2 + l3));
     dprint(p0);
     if ((trace_fraction < 1)) {
-        goto b2;
+        l0.enemy = trace_ent;
     }
-    goto b4;
-b2:
-    l0.enemy = trace_ent;
-b4:
     l0 = nextent(l0);
     return l0;
 }
@@ -236,12 +200,8 @@ void string_literals(entity p0) {
     dprint("hello, \"world\"\n");
     p0.classname = "monster_ogre";
     if ((p0.netname == "player")) {
-        goto b2;
+        bprint(0, "tab\there \\ \x80\xff\n");
     }
-    goto b4;
-b2:
-    bprint(0, "tab\there \\ \x80\xff\n");
-b4:
 }
 
 float comparisons(entity p0, entity p1, string p2) {

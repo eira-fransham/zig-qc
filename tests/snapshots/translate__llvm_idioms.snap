@@ -29,13 +29,10 @@ string weapon_name(float p0) {
     local string l0;
     p0 = ((p0 | p0) - 1);
     if (((p0 < 0) | (p0 > 1))) {
-        goto b2;
+        l0 = "none";
+    } else {
+        l0 = __wasm_data_string(((1048576 + (p0 * 4)) + 20));
     }
-    l0 = __wasm_data_string(((1048576 + (p0 * 4)) + 20));
-    goto b4;
-b2:
-    l0 = "none";
-b4:
     return l0;
 }
 
@@ -60,12 +57,10 @@ float count_to(float p0) {
     l0 = 0;
 b3:
     if ((l0 >= p0)) {
-        goto b2;
+        return l0;
     }
     l0 = (l0 + 1);
     goto b3;
-b2:
-    return l0;
 }
 
 float is_negative(float p0) {

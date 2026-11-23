@@ -53,12 +53,10 @@ vector splat_z(entity p0) {
 
 void sunk_store(entity p0, entity p1, float p2) {
     if ((p2 != 0)) {
-        goto b2;
+        p0.enemy = p1;
+        return;
     }
     p0.think = __wasm_noop;
-    return;
-b2:
-    p0.enemy = p1;
 }
 
 float widened_mask(vector p0) {
