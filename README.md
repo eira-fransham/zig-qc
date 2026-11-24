@@ -1,6 +1,6 @@
 # Zig to QuakeC compiler
 
-This is a project to allow writing Quake mods in Zig instead of QuakeC. If you know anything about QuakeC, this will sound like a completely unhinged idea, and I'm proud to say that it is. [See below](#how-it-works) for a description of how I got it to work.
+This is a project to allow writing Quake mods in Zig instead of QuakeC. If you know anything about QuakeC, this will sound like a completely unhinged idea. That's because it is. [See below](#how-it-works) for a description of how I got it to work.
 
 ## Prerequisites
 
@@ -54,7 +54,7 @@ pub export fn main() void {
 }
 ```
 
-From there, you can start writing your mod! To see a more complex example see the `qw-zig` folder, or check out [my fork of LibreQuake](https://github.com/eira-fransham/LibreQuake) which includes a translation of LibreQuake's QuakeC code to Zig.
+From there, you can start writing your mod! To see a more complex example see the `qw-zig` folder, or check out [my fork of LibreQuake](https://github.com/eira-fransham/LibreQuake-zig) which includes a translation of LibreQuake's QuakeC code to Zig that gets compiled to a vanilla-compatible binary.
 
 ## Comparison to QuakeC
 
@@ -207,6 +207,12 @@ LLVM will try to keep values in locals, which are easy for us to figure out the 
 
 The compiler has a few extra passes that exist to make the output a bit nicer-looking. During analysis, all control flow is essentially treated as `goto`, so the converter tries to detect common patterns like `while(cond) { .. }`, `do { .. } while(cond);`, nested if-else blocks, `switch` statements etc. This should hopefully be optimised better by FTEQCC than using `goto`s. I originally implemented this because using `if (cond) { goto label; }` caused FTEQCC to hang forever.
 
+## Testing
+
+There are fairly-extensive snapshot tests to make sure that it's obvious if a compiler change resulted in different code. I also use the [`run-qc` command](https://github.com/eira-fransham/bevy_mod_scripting_qcvm/tree/master/crates/run-qc) from my [`qcvm` project](https://github.com/eira-fransham/bevy_mod_scripting_qcvm/tree/master/crates/qcvm) to ensure that the generated code compiles correctly.
+
+I've also tested `progs.dat` compiled from [my Zig translation of LibreQuake](https://github.com/eira-fransham/LibreQuake-zig/tree/main/lq-zig) in both FTEQW and my own [Seismon engine](https://github.com/eira-fransham/seismon) and haven't noticed any differences.
+
 ## Limitations
 
 Currently, we only detect a limited number of ways that the stack can be used. The biggest limitation is that functions taking a pointer to a value that lives on the stack are not supported at all. There are ways we could support this, but right now we just return an error. For now, just assume that function arguments and return values have the same limitations as they do in QuakeC code, i.e. just bare `float`, `vector`, `string` or `entity`.
@@ -217,8 +223,8 @@ We also don't try to support FTEQCC's `int` type, although it would simplify som
 
 ## AI disclosure
 
-This project was built with heavy AI assistance. In particular, the tests and the `qw-zig` translation of the GPL QuakeWorld QuakeC code are all entirely AI-written (albeit with a lot of human direction). The implementation was written with AI assistance, and AI was used to debug issues.
+This README was written by hand, but the project was built with heavy AI assistance. In particular, the Zig port of both QuakeWorld's and LibreQuake's QuakeC code were entirely handled by AI (albeit with a lot of human direction). The tests and implementation was written with AI assistance, and AI was used to debug issues..
 
-I haven't manually written any documentation yet, so please take into account that most of the comments you see have been written by the AI. While I've looked over all the code now, and I've removed any obviously-wrong documentation/comments, I haven't written any of my own just yet. Take anything you read with a grain of salt.
+I haven't manually written any documentation yet other than this README, so please take into account that most of the code documentation and comments you see have been written by the AI. While I've looked over all the code now, and I've removed any obviously-wrong documentation/comments, I haven't written any of my own just yet. Take anything you read with a grain of salt.
 
 The original plan with this project was for it to be a silly little task that I could use as a real-world example to see how vibe-coding worked. I recently started trying out Claude, so the idea was that I would come up with the general mechanism and let the LLM do the rest, only reviewing its plans. However, it didn't take long before the parts of the code I did see were too obviously-wrong for me to accept, so I ended up redesigning the project myself and just let Claude handle debugging and filling out the implementation.
