@@ -116,7 +116,7 @@ export fn func_button() void {
             "switch02.wav",
             "switch04.wav",
         },
-    )
+    );
     // ..
 }
 ```
