@@ -182,11 +182,13 @@ Since a WebAssembly binary is entirely self-contained and we have a small number
 It's not uncommon to end up wth two functions that have the same body. This is especially true when compiling Zig, since the compilation goes via LLVM and even functions which didn't start out with the same body could end up looking the same after optimisation. The most basic example of two functions with the same body looks like this:
 
 ```quakec
-string identity_s(string v) {
+string(string v) identity_s =
+{
     return v;
 }
 
-entity identity_e(entity v) {
+entity(entity v) identity_e =
+{
     return v;
 }
 ```
