@@ -30,6 +30,14 @@
   (func (export "frame_seven") (param $e i32)
     (call $set_frame (local.get $e) (i32.const 0x40e00000)))
 
+  ;; A vector field passed by value, its first two components loaded as one
+  ;; `i64` (also copied elsewhere) and splatted: `f(e.origin); a.origin_xy = ...`.
+  (func (export "pass_xyz") (param $e i32) (param $a i32) (result v128)
+    (local $xy i64)
+    (local.set $xy (i64.load offset=40 align=4 (local.get $e)))
+    (i64.store offset=40 align=4 (local.get $a) (local.get $xy))
+    (v128.load32_lane offset=48 2 (local.get $e) (i64x2.splat (local.get $xy))))
+
   ;; One field loaded into every lane: `origin_z * (1, 2, 3)`.
   (func (export "splat_z") (param $e i32) (result v128)
     (f32x4.mul

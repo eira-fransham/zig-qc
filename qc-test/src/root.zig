@@ -260,7 +260,7 @@ pub export fn call_through_field(e: Entity) Entity {
 }
 
 noinline fn callThink(e: Entity) void {
-    const f = defs.callAs(fn (Entity, f32) callconv(.c) void, e.think);
+    const f = defs.callAs(fn (Entity, f32) callconv(.c) void, e.think.?);
     f(e, 1);
     f(e, 2);
 }

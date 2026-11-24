@@ -10,6 +10,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 
@@ -141,7 +142,7 @@ pub export fn worldspawn() void {
     const self = q.me();
 
     // `float rj = 1;` in defs.qc (see `defs.rj`).
-    q.rj.set(1);
+    g.rj.set(1);
 
     lastspawn.set(q.world.get());
     InitBodyQue();
@@ -316,12 +317,12 @@ pub export fn worldspawn() void {
 }
 
 pub export fn StartFrame() void {
-    q.timelimit.set(q.cvar(S("timelimit")) * 60);
-    q.fraglimit.set(q.cvar(S("fraglimit")));
-    q.teamplay.set(q.cvar(S("teamplay")));
-    q.deathmatch.set(q.cvar(S("deathmatch")));
+    g.timelimit.set(q.cvar(S("timelimit")) * 60);
+    g.fraglimit.set(q.cvar(S("fraglimit")));
+    g.teamplay.set(q.cvar(S("teamplay")));
+    g.deathmatch.set(q.cvar(S("deathmatch")));
 
-    q.framecount.set(q.framecount.get() + 1);
+    g.framecount.set(g.framecount.get() + 1);
 }
 
 // ==============================================================================

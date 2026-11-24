@@ -10,6 +10,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 const Vector = q.Vector;
@@ -40,7 +41,7 @@ pub const intermission_exittime = q.userGlobal(f32, "intermission_exittime");
 /// Use mangle instead of angle, so you can set pitch or roll as well as yaw.  'pitch roll yaw'
 pub export fn info_intermission() void {
     const self = q.me();
-    self.angles = self.get(q.mangle); // so C can get at it
+    self.angles = self.get(g.mangle); // so C can get at it
 }
 
 pub export fn SetChangeParms() void {
@@ -178,7 +179,7 @@ pub fn execute_changelevel() callconv(.c) void {
     q.WriteByte(q.MSG_ALL, 3);
 
     const origin = pos.origin;
-    const mangle = pos.get(q.mangle);
+    const mangle = pos.get(g.mangle);
     q.WriteByte(q.MSG_ALL, q.SVC_INTERMISSION);
     q.WriteCoord(q.MSG_ALL, origin[0]);
     q.WriteCoord(q.MSG_ALL, origin[1]);
@@ -216,7 +217,7 @@ pub fn changelevel_touch() callconv(.c) void {
     q.bprint(q.PRINT_HIGH, other.netname);
     q.bprint(q.PRINT_HIGH, S(" exited the level\n"));
 
-    nextmap.set(self.get(q.map));
+    nextmap.set(self.get(g.map));
 
     subs.SUB_UseTargets();
 
@@ -234,7 +235,7 @@ pub fn changelevel_touch() callconv(.c) void {
 /// info_intermission spot and display stats.
 pub export fn trigger_changelevel() void {
     const self = q.me();
-    if (self.get(q.map).isNull())
+    if (self.get(g.map).isNull())
         q.objerror(S("chagnelevel trigger doesn't have map"));
 
     subs.InitTrigger();
@@ -363,29 +364,29 @@ pub export fn PutClientInServer() void {
     self.takedamage = q.DAMAGE_AIM;
     self.solid = q.SOLID_SLIDEBOX;
     self.movetype = q.MOVETYPE_WALK;
-    self.set(q.show_hostile, 0);
+    self.set(g.show_hostile, 0);
     self.max_health = 100;
     self.flags = q.FL_CLIENT;
-    self.set(q.air_finished, q.time.get() + 12);
-    self.set(q.dmg, 2); // initial water damage
-    self.set(q.super_damage_finished, 0);
-    self.set(q.radsuit_finished, 0);
-    self.set(q.invisible_finished, 0);
-    self.set(q.invincible_finished, 0);
+    self.set(g.air_finished, q.time.get() + 12);
+    self.set(g.dmg, 2); // initial water damage
+    self.set(g.super_damage_finished, 0);
+    self.set(g.radsuit_finished, 0);
+    self.set(g.invisible_finished, 0);
+    self.set(g.invincible_finished, 0);
     self.effects = 0;
-    self.set(q.invincible_time, 0);
+    self.set(g.invincible_time, 0);
 
     DecodeLevelParms();
 
     weapons.W_SetCurrentAmmo();
 
-    self.set(q.attack_finished, q.time.get());
-    self.set(q.th_pain, q.func(player.player_pain));
-    self.set(q.th_die, q.func(player.PlayerDie));
+    self.set(g.attack_finished, q.time.get());
+    self.set(g.th_pain, q.func(player.player_pain));
+    self.set(g.th_die, q.func(player.PlayerDie));
 
     self.deadflag = q.DEAD_NO;
     // paustime is set by teleporters to keep the player from moving a while
-    self.set(q.pausetime, 0);
+    self.set(g.pausetime, 0);
 
     const spot = SelectSpawnPoint();
 
@@ -418,12 +419,12 @@ pub export fn PutClientInServer() void {
 
     // Set Rocket Jump Modifiers
     if (q.stof(q.infokey(q.world.get(), S("rj"))) != 0) {
-        q.rj.set(q.stof(q.infokey(q.world.get(), S("rj"))));
+        g.rj.set(q.stof(q.infokey(q.world.get(), S("rj"))));
     }
 
     const all_armor = q.bor(q.bor(q.IT_ARMOR1, q.IT_ARMOR2), q.IT_ARMOR3);
 
-    if (q.deathmatch.get() == 4) {
+    if (g.deathmatch.get() == 4) {
         self.ammo_shells = 0;
         if (q.stof(q.infokey(q.world.get(), S("axe"))) == 0) {
             self.ammo_nails = 255;
@@ -442,11 +443,11 @@ pub export fn PutClientInServer() void {
         self.armortype = 0.8;
         self.health = 250;
         self.items = q.bor(self.items, q.IT_INVULNERABILITY);
-        self.set(q.invincible_time, 1);
-        self.set(q.invincible_finished, q.time.get() + 3);
+        self.set(g.invincible_time, 1);
+        self.set(g.invincible_finished, q.time.get() + 3);
     }
 
-    if (q.deathmatch.get() == 5) {
+    if (g.deathmatch.get() == 5) {
         self.ammo_nails = 80;
         self.ammo_shells = 30;
         self.ammo_rockets = 10;
@@ -462,8 +463,8 @@ pub export fn PutClientInServer() void {
         self.armortype = 0.8;
         self.health = 200;
         self.items = q.bor(self.items, q.IT_INVULNERABILITY);
-        self.set(q.invincible_time, 1);
-        self.set(q.invincible_finished, q.time.get() + 3);
+        self.set(g.invincible_time, 1);
+        self.set(g.invincible_finished, q.time.get() + 3);
     }
 }
 
@@ -520,17 +521,17 @@ pub fn NextLevel() callconv(.c) void {
         }
 
         o = q.spawn();
-        o.set(q.map, q.mapname.get());
+        o.set(g.map, q.mapname.get());
     } else {
         // find a trigger changelevel
         o = q.find(q.world.get(), .classname, S("trigger_changelevel"));
         if (o.isNull() or q.mapname.get().eql(S("start"))) { // go back to same map if no trigger_changelevel
             o = q.spawn();
-            o.set(q.map, q.mapname.get());
+            o.set(g.map, q.mapname.get());
         }
     }
 
-    nextmap.set(o.get(q.map));
+    nextmap.set(o.get(g.map));
 
     if (o.nextthink < q.time.get()) {
         o.think = q.func(execute_changelevel);
@@ -543,10 +544,10 @@ pub fn NextLevel() callconv(.c) void {
 /// Exit deathmatch games upon conditions
 pub fn CheckRules() callconv(.c) void {
     const self = q.me();
-    if (q.timelimit.get() != 0 and q.time.get() >= q.timelimit.get())
+    if (g.timelimit.get() != 0 and q.time.get() >= g.timelimit.get())
         NextLevel();
 
-    if (q.fraglimit.get() != 0 and self.frags >= q.fraglimit.get())
+    if (g.fraglimit.get() != 0 and self.frags >= g.fraglimit.get())
         NextLevel();
 }
 
@@ -591,8 +592,8 @@ pub fn PlayerJump() callconv(.c) void {
 
     if (self.waterlevel >= 2) {
         // play swiming sound
-        if (self.get(q.swim_flag) < q.time.get()) {
-            self.set(q.swim_flag, q.time.get() + 1);
+        if (self.get(g.swim_flag) < q.time.get()) {
+            self.set(g.swim_flag, q.time.get() + 1);
             if (q.random() < 0.5) {
                 q.sound(self, q.CHAN_BODY, S("misc/water1.wav"), 1, q.ATTN_NORM);
             } else {
@@ -630,20 +631,20 @@ pub fn WaterMove() callconv(.c) void {
         return;
 
     if (self.waterlevel != 3) {
-        if (self.get(q.air_finished) < time) {
+        if (self.get(g.air_finished) < time) {
             q.sound(self, q.CHAN_VOICE, S("player/gasp2.wav"), 1, q.ATTN_NORM);
-        } else if (self.get(q.air_finished) < time + 9) {
+        } else if (self.get(g.air_finished) < time + 9) {
             q.sound(self, q.CHAN_VOICE, S("player/gasp1.wav"), 1, q.ATTN_NORM);
         }
-        self.set(q.air_finished, time + 12);
-        self.set(q.dmg, 2);
-    } else if (self.get(q.air_finished) < time) { // drown!
-        if (self.get(q.pain_finished) < time) {
-            self.set(q.dmg, self.get(q.dmg) + 2);
-            if (self.get(q.dmg) > 15)
-                self.set(q.dmg, 10);
-            combat.T_Damage(self, q.world.get(), q.world.get(), self.get(q.dmg));
-            self.set(q.pain_finished, time + 1);
+        self.set(g.air_finished, time + 12);
+        self.set(g.dmg, 2);
+    } else if (self.get(g.air_finished) < time) { // drown!
+        if (self.get(g.pain_finished) < time) {
+            self.set(g.dmg, self.get(g.dmg) + 2);
+            if (self.get(g.dmg) > 15)
+                self.set(g.dmg, 10);
+            combat.T_Damage(self, q.world.get(), q.world.get(), self.get(g.dmg));
+            self.set(g.pain_finished, time + 1);
         }
     }
 
@@ -658,7 +659,7 @@ pub fn WaterMove() callconv(.c) void {
 
     if (self.watertype == q.CONTENT_LAVA) { // do damage
         if (self.get(dmgtime) < time) {
-            if (self.get(q.radsuit_finished) > time) {
+            if (self.get(g.radsuit_finished) > time) {
                 self.set(dmgtime, time + 1);
             } else {
                 self.set(dmgtime, time + 0.2);
@@ -667,7 +668,7 @@ pub fn WaterMove() callconv(.c) void {
             combat.T_Damage(self, q.world.get(), q.world.get(), 10 * self.waterlevel);
         }
     } else if (self.watertype == q.CONTENT_SLIME) { // do damage
-        if (self.get(dmgtime) < time and self.get(q.radsuit_finished) < time) {
+        if (self.get(dmgtime) < time and self.get(g.radsuit_finished) < time) {
             self.set(dmgtime, time + 1);
             combat.T_Damage(self, q.world.get(), q.world.get(), 4 * self.waterlevel);
         }
@@ -733,7 +734,7 @@ pub export fn PlayerPreThink() void {
 
     q.makevectors(self.v_angle); // is this still used
 
-    self.set(q.deathtype, S(""));
+    self.set(g.deathtype, S(""));
 
     CheckRules();
     WaterMove();
@@ -755,10 +756,10 @@ pub export fn PlayerPreThink() void {
     }
 
     // teleporters can force a non-moving pause time
-    if (q.time.get() < self.get(q.pausetime))
+    if (q.time.get() < self.get(g.pausetime))
         self.velocity = q.vec(0, 0, 0);
 
-    if (q.time.get() > self.get(q.attack_finished) and self.currentammo == 0 and self.weapon != q.IT_AXE) {
+    if (q.time.get() > self.get(g.attack_finished) and self.currentammo == 0 and self.weapon != q.IT_AXE) {
         self.weapon = weapons.W_BestWeapon();
         weapons.W_SetCurrentAmmo();
     }
@@ -775,31 +776,31 @@ pub fn CheckPowerups() callconv(.c) void {
         return;
 
     // invisibility
-    if (self.get(q.invisible_finished) != 0) {
+    if (self.get(g.invisible_finished) != 0) {
         // sound and screen flash when items starts to run out
-        if (self.get(q.invisible_sound) < time) {
+        if (self.get(g.invisible_sound) < time) {
             q.sound(self, q.CHAN_AUTO, S("items/inv3.wav"), 0.5, q.ATTN_IDLE);
-            self.set(q.invisible_sound, time + ((q.random() * 3) + 1));
+            self.set(g.invisible_sound, time + ((q.random() * 3) + 1));
         }
 
-        if (self.get(q.invisible_finished) < time + 3) {
-            if (self.get(q.invisible_time) == 1) {
+        if (self.get(g.invisible_finished) < time + 3) {
+            if (self.get(g.invisible_time) == 1) {
                 q.sprint(self, q.PRINT_HIGH, S("Ring of Shadows magic is fading\n"));
                 q.stuffcmd(self, S("bf\n"));
                 q.sound(self, q.CHAN_AUTO, S("items/inv2.wav"), 1, q.ATTN_NORM);
-                self.set(q.invisible_time, time + 1);
+                self.set(g.invisible_time, time + 1);
             }
 
-            if (self.get(q.invisible_time) < time) {
-                self.set(q.invisible_time, time + 1);
+            if (self.get(g.invisible_time) < time) {
+                self.set(g.invisible_time, time + 1);
                 q.stuffcmd(self, S("bf\n"));
             }
         }
 
-        if (self.get(q.invisible_finished) < time) { // just stopped
+        if (self.get(g.invisible_finished) < time) { // just stopped
             self.items = self.items - q.IT_INVISIBILITY;
-            self.set(q.invisible_finished, 0);
-            self.set(q.invisible_time, 0);
+            self.set(g.invisible_finished, 0);
+            self.set(g.invisible_time, 0);
         }
 
         // use the eyes
@@ -810,28 +811,28 @@ pub fn CheckPowerups() callconv(.c) void {
     }
 
     // invincibility
-    if (self.get(q.invincible_finished) != 0) {
+    if (self.get(g.invincible_finished) != 0) {
         // sound and screen flash when items starts to run out
-        if (self.get(q.invincible_finished) < time + 3) {
-            if (self.get(q.invincible_time) == 1) {
+        if (self.get(g.invincible_finished) < time + 3) {
+            if (self.get(g.invincible_time) == 1) {
                 q.sprint(self, q.PRINT_HIGH, S("Protection is almost burned out\n"));
                 q.stuffcmd(self, S("bf\n"));
                 q.sound(self, q.CHAN_AUTO, S("items/protect2.wav"), 1, q.ATTN_NORM);
-                self.set(q.invincible_time, time + 1);
+                self.set(g.invincible_time, time + 1);
             }
 
-            if (self.get(q.invincible_time) < time) {
-                self.set(q.invincible_time, time + 1);
+            if (self.get(g.invincible_time) < time) {
+                self.set(g.invincible_time, time + 1);
                 q.stuffcmd(self, S("bf\n"));
             }
         }
 
-        if (self.get(q.invincible_finished) < time) { // just stopped
+        if (self.get(g.invincible_finished) < time) { // just stopped
             self.items = self.items - q.IT_INVULNERABILITY;
-            self.set(q.invincible_time, 0);
-            self.set(q.invincible_finished, 0);
+            self.set(g.invincible_time, 0);
+            self.set(g.invincible_finished, 0);
         }
-        if (self.get(q.invincible_finished) > time) {
+        if (self.get(g.invincible_finished) > time) {
             self.effects = q.bor(self.effects, q.EF_DIMLIGHT);
             self.effects = q.bor(self.effects, q.EF_RED);
         } else {
@@ -841,40 +842,40 @@ pub fn CheckPowerups() callconv(.c) void {
     }
 
     // super damage
-    if (self.get(q.super_damage_finished) != 0) {
+    if (self.get(g.super_damage_finished) != 0) {
 
         // sound and screen flash when items starts to run out
 
-        if (self.get(q.super_damage_finished) < time + 3) {
-            if (self.get(q.super_time) == 1) {
-                if (q.deathmatch.get() == 4) {
+        if (self.get(g.super_damage_finished) < time + 3) {
+            if (self.get(g.super_time) == 1) {
+                if (g.deathmatch.get() == 4) {
                     q.sprint(self, q.PRINT_HIGH, S("OctaPower is wearing off\n"));
                 } else {
                     q.sprint(self, q.PRINT_HIGH, S("Quad Damage is wearing off\n"));
                 }
                 q.stuffcmd(self, S("bf\n"));
                 q.sound(self, q.CHAN_AUTO, S("items/damage2.wav"), 1, q.ATTN_NORM);
-                self.set(q.super_time, time + 1);
+                self.set(g.super_time, time + 1);
             }
 
-            if (self.get(q.super_time) < time) {
-                self.set(q.super_time, time + 1);
+            if (self.get(g.super_time) < time) {
+                self.set(g.super_time, time + 1);
                 q.stuffcmd(self, S("bf\n"));
             }
         }
 
-        if (self.get(q.super_damage_finished) < time) { // just stopped
+        if (self.get(g.super_damage_finished) < time) { // just stopped
             self.items = self.items - q.IT_QUAD;
-            if (q.deathmatch.get() == 4) {
+            if (g.deathmatch.get() == 4) {
                 self.ammo_cells = 255;
                 self.armorvalue = 1;
                 self.armortype = 0.8;
                 self.health = 100;
             }
-            self.set(q.super_damage_finished, 0);
-            self.set(q.super_time, 0);
+            self.set(g.super_damage_finished, 0);
+            self.set(g.super_time, 0);
         }
-        if (self.get(q.super_damage_finished) > time) {
+        if (self.get(g.super_damage_finished) > time) {
             self.effects = q.bor(self.effects, q.EF_DIMLIGHT);
             self.effects = q.bor(self.effects, q.EF_BLUE);
         } else {
@@ -884,28 +885,28 @@ pub fn CheckPowerups() callconv(.c) void {
     }
 
     // suit
-    if (self.get(q.radsuit_finished) != 0) {
-        self.set(q.air_finished, time + 12); // don't drown
+    if (self.get(g.radsuit_finished) != 0) {
+        self.set(g.air_finished, time + 12); // don't drown
 
         // sound and screen flash when items starts to run out
-        if (self.get(q.radsuit_finished) < time + 3) {
-            if (self.get(q.rad_time) == 1) {
+        if (self.get(g.radsuit_finished) < time + 3) {
+            if (self.get(g.rad_time) == 1) {
                 q.sprint(self, q.PRINT_HIGH, S("Air supply in Biosuit expiring\n"));
                 q.stuffcmd(self, S("bf\n"));
                 q.sound(self, q.CHAN_AUTO, S("items/suit2.wav"), 1, q.ATTN_NORM);
-                self.set(q.rad_time, time + 1);
+                self.set(g.rad_time, time + 1);
             }
 
-            if (self.get(q.rad_time) < time) {
-                self.set(q.rad_time, time + 1);
+            if (self.get(g.rad_time) < time) {
+                self.set(g.rad_time, time + 1);
                 q.stuffcmd(self, S("bf\n"));
             }
         }
 
-        if (self.get(q.radsuit_finished) < time) { // just stopped
+        if (self.get(g.radsuit_finished) < time) { // just stopped
             self.items = self.items - q.IT_SUIT;
-            self.set(q.rad_time, 0);
-            self.set(q.radsuit_finished, 0);
+            self.set(g.rad_time, 0);
+            self.set(g.radsuit_finished, 0);
         }
     }
 }
@@ -923,11 +924,11 @@ pub export fn PlayerPostThink() void {
         return;
 
     // check to see if player landed and play landing sound
-    if (self.get(q.jump_flag) < -300 and q.has(self.flags, q.FL_ONGROUND)) {
+    if (self.get(g.jump_flag) < -300 and q.has(self.flags, q.FL_ONGROUND)) {
         if (self.watertype == q.CONTENT_WATER) {
             q.sound(self, q.CHAN_BODY, S("player/h2ojump.wav"), 1, q.ATTN_NORM);
-        } else if (self.get(q.jump_flag) < -650) {
-            self.set(q.deathtype, S("falling"));
+        } else if (self.get(g.jump_flag) < -650) {
+            self.set(g.deathtype, S("falling"));
             combat.T_Damage(self, q.world.get(), q.world.get(), 5);
             q.sound(self, q.CHAN_VOICE, S("player/land2.wav"), 1, q.ATTN_NORM);
         } else {
@@ -935,7 +936,7 @@ pub export fn PlayerPostThink() void {
         }
     }
 
-    self.set(q.jump_flag, self.velocity[2]);
+    self.set(g.jump_flag, self.velocity[2]);
 
     CheckPowerups();
 
@@ -983,8 +984,8 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
     if (targ.classname.neq(S("player")))
         return;
 
-    if (q.deathmatch.get() > 3) {
-        if (targ.get(q.deathtype).eql(S("selfwater"))) {
+    if (g.deathmatch.get() > 3) {
+        if (targ.get(g.deathtype).eql(S("selfwater"))) {
             q.bprint(M, targ.netname);
             q.bprint(M, S(" electrocutes himself.\n "));
             targ.frags = targ.frags - 1;
@@ -1024,8 +1025,8 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
         return;
     }
 
-    if (targ.get(q.deathtype).eql(S("squish"))) {
-        if (q.teamplay.get() != 0 and targteam.eql(attackerteam) and attackerteam.neq(S("")) and targ.neq(attacker)) {
+    if (targ.get(g.deathtype).eql(S("squish"))) {
+        if (g.teamplay.get() != 0 and targteam.eql(attackerteam) and attackerteam.neq(S("")) and targ.neq(attacker)) {
             q.logfrag(attacker, attacker);
             attacker.frags = attacker.frags - 1;
             q.bprint(M, attacker.netname);
@@ -1054,9 +1055,9 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
             q.logfrag(attacker, attacker);
             attacker.frags = attacker.frags - 1;
             q.bprint(M, targ.netname);
-            if (targ.get(q.deathtype).eql(S("grenade"))) {
+            if (targ.get(g.deathtype).eql(S("grenade"))) {
                 q.bprint(M, S(" tries to put the pin back in\n"));
-            } else if (targ.get(q.deathtype).eql(S("rocket"))) {
+            } else if (targ.get(g.deathtype).eql(S("rocket"))) {
                 q.bprint(M, S(" becomes bored with life\n"));
             } else if (targ.weapon == 64 and targ.waterlevel > 1) {
                 if (targ.watertype == q.CONTENT_SLIME) {
@@ -1070,7 +1071,7 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
                 q.bprint(M, S(" becomes bored with life\n"));
             }
             return;
-        } else if (q.teamplay.get() == 2 and targteam.eql(attackerteam) and attackerteam.neq(S(""))) {
+        } else if (g.teamplay.get() == 2 and targteam.eql(attackerteam) and attackerteam.neq(S(""))) {
             const deathstring = if (rnum < 0.25)
                 S(" mows down a teammate\n")
             else if (rnum < 0.50)
@@ -1090,11 +1091,11 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
             attacker.frags = attacker.frags + 1;
 
             // (These are unset in the original if nothing below matches.)
-            var deathstring = q.string_null.get();
-            var deathstring2 = q.string_null.get();
+            var deathstring = g.string_null.get();
+            var deathstring2 = g.string_null.get();
 
             rnum = attacker.weapon;
-            const deathtype = targ.get(q.deathtype);
+            const deathtype = targ.get(g.deathtype);
             if (deathtype.eql(S("nail"))) {
                 deathstring = S(" was nailed by ");
                 deathstring2 = S("\n");
@@ -1109,7 +1110,7 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
                     deathstring2 = S("'s grenade\n");
                 }
             } else if (deathtype.eql(S("rocket"))) {
-                if (attacker.get(q.super_damage_finished) > 0 and targ.health < -40) {
+                if (attacker.get(g.super_damage_finished) > 0 and targ.health < -40) {
                     rnum = q.random();
                     if (rnum < 0.3) {
                         deathstring = S(" was brutalized by ");
@@ -1187,7 +1188,7 @@ pub fn ClientObituary(targ: Entity, attacker: Entity) callconv(.c) void {
             return;
         }
 
-        const deathtype = targ.get(q.deathtype);
+        const deathtype = targ.get(g.deathtype);
         if (attacker.classname.eql(S("explo_box"))) {
             q.bprint(M, S(" blew up\n"));
             return;

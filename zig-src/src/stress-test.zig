@@ -14,7 +14,7 @@ pub export fn scalar_globals() f32 {
     defs.other.set(defs.self.get());
     defs.msg_entity.set(defs.world.get());
     defs.mapname.set(defs.mapname.get());
-    defs.force_retouch.set(defs.deathmatch.get());
+    defs.force_retouch.set(deathmatch.get());
     defs.serverflags.set(defs.total_secrets.get() + 1);
     return defs.time.get() + defs.frametime.get();
 }
@@ -169,8 +169,9 @@ const counter = defs.userGlobal(f32, "counter");
 const last_dir = defs.userGlobal(Vector, "last_dir");
 const on_done = defs.userGlobal(fn () callconv(.c) void, "on_done");
 const attack_finished = defs.userField(f32, "attack_finished");
+const deathmatch = defs.userGlobal(f32, "deathmatch");
 const goal = defs.userField(Vector, "goal");
-const th_pain = defs.userField(defs.Function, "th_pain");
+const th_pain = defs.userField(?defs.Function, "th_pain");
 
 fn bump() callconv(.c) void {
     counter.set(counter.get() + 1);
@@ -191,7 +192,7 @@ pub export fn user_defs(e: Entity) void {
     e.set(th_pain, defs.func(pain));
     on_done.set(defs.func(bump));
     if (defs.fnNeq(e.get(.think), defs.func(helperThink))) e.set(.nextthink, defs.time.get());
-    if (!defs.fnIsNull(e.get(th_pain))) defs.callAs(fn (Entity, f32) callconv(.c) void, e.get(th_pain))(activator.get(), 5);
+    if (!defs.fnIsNull(e.get(th_pain))) defs.callAs(fn (Entity, f32) callconv(.c) void, e.get(th_pain).?)(activator.get(), 5);
     const spot = defs.find(defs.world.get(), .classname, String.lit("info_player_start"));
     if (!spot.isNull()) e.set(.origin, spot.get(.origin));
 }

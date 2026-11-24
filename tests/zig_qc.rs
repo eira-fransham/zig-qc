@@ -56,8 +56,11 @@ fn init() {
     let defs = std::fs::read_to_string(dir.join("src/defs.zig")).unwrap();
     assert_eq!(
         defs,
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/zig-src/src/defs.zig"))
-            .unwrap()
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/zig-src/src/defs-vanilla.zig"
+        ))
+        .unwrap()
     );
     assert!(dir.join("src/root.zig").is_file());
 
@@ -65,6 +68,24 @@ fn init() {
     let out = zig_qc(&dir, &["init", "my_mod"], None);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("already exists"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn init_quakeworld() {
+    let dir = temp_dir();
+    let out = zig_qc(&dir, &["init", "--target", "quakeworld", "qw_mod"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let defs = std::fs::read_to_string(dir.join("src/defs.zig")).unwrap();
+    assert_eq!(
+        defs,
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/zig-src/src/defs.zig"))
+            .unwrap()
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

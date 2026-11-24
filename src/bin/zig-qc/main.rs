@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use wasm_to_qc::{sysdefs, zigdefs};
 
 const BUILD_ZIG: &str = include_str!("build.zig.in");
 const BUILD_ZIG_ZON: &str = include_str!("build.zig.zon.in");
 const ROOT_ZIG: &str = include_str!("root.zig.in");
-const DEFS_ZIG: &str = include_str!("../../../zig-src/src/defs.zig");
 
 /// Name of the wasm file `zig-qc build` asks `zig build` for.
 const BUILD_WASM: &str = "zig-qc-build.wasm";
@@ -30,6 +30,11 @@ enum Cmd {
         /// Project name; defaults to the current directory's name. Must be a
         /// valid Zig identifier.
         name: Option<String>,
+        /// Which engine's system defs (`defs.qc` layout) to target. The
+        /// generated `src/defs.zig` tells the converter, via
+        /// `__quakec_target`.
+        #[arg(long, value_enum, default_value_t = Target::Vanilla)]
+        target: Target,
     },
     /// Build the project in the current directory into `zig-out/lib/progs.dat`.
     #[clap(arg_required_else_help = true)]
@@ -41,14 +46,32 @@ enum Cmd {
     },
 }
 
+/// A supported engine, named as in `sysdefs`.
+#[derive(Clone, Copy, ValueEnum)]
+enum Target {
+    /// NetQuake (`defs.qc`).
+    Vanilla,
+    /// QuakeWorld (`qw-qc/defs.qc`).
+    Quakeworld,
+}
+
+impl Target {
+    fn defs(self) -> &'static sysdefs::SysDefs {
+        match self {
+            Target::Vanilla => &sysdefs::VANILLA,
+            Target::Quakeworld => &sysdefs::QUAKEWORLD,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     match Args::parse().command {
-        Cmd::Init { name } => init(name),
+        Cmd::Init { name, target } => init(name, target),
         Cmd::Build { args } => build(args),
     }
 }
 
-fn init(name: Option<String>) -> Result<()> {
+fn init(name: Option<String>, target: Target) -> Result<()> {
     let name = match name {
         Some(name) => {
             check_name(&name)?;
@@ -76,7 +99,7 @@ fn init(name: Option<String>) -> Result<()> {
                 .replace("@NAME@", name)
                 .replace("@FINGERPRINT@", &format!("{:#018x}", fingerprint(name))),
         ),
-        ("src/defs.zig", DEFS_ZIG.to_string()),
+        ("src/defs.zig", zigdefs::generate(target.defs())),
         ("src/root.zig", ROOT_ZIG.replace("@NAME@", name)),
     ];
     for (path, _) in &files {
@@ -97,54 +120,6 @@ fn init(name: Option<String>) -> Result<()> {
 /// The name becomes the package's `.name` enum literal in `build.zig.zon`,
 /// so it must be a bare Zig identifier.
 fn check_name(name: &str) -> Result<()> {
-    const KEYWORDS: &[&str] = &[
-        "addrspace",
-        "align",
-        "allowzero",
-        "and",
-        "anyframe",
-        "anytype",
-        "asm",
-        "break",
-        "callconv",
-        "catch",
-        "comptime",
-        "const",
-        "continue",
-        "defer",
-        "else",
-        "enum",
-        "errdefer",
-        "error",
-        "export",
-        "extern",
-        "fn",
-        "for",
-        "if",
-        "inline",
-        "linksection",
-        "noalias",
-        "noinline",
-        "nosuspend",
-        "opaque",
-        "or",
-        "orelse",
-        "packed",
-        "pub",
-        "resume",
-        "return",
-        "struct",
-        "suspend",
-        "switch",
-        "test",
-        "threadlocal",
-        "try",
-        "union",
-        "unreachable",
-        "var",
-        "volatile",
-        "while",
-    ];
     let mut chars = name.chars();
     let valid = chars
         .next()
@@ -155,7 +130,7 @@ fn check_name(name: &str) -> Result<()> {
         "invalid project name `{name}`: it must be a Zig identifier (letters, digits and `_`, not starting with a digit)"
     );
     ensure!(
-        !KEYWORDS.contains(&name),
+        !zigdefs::ZIG_KEYWORDS.contains(&name),
         "invalid project name `{name}`: it is a Zig keyword"
     );
     ensure!(

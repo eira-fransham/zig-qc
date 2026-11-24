@@ -8,6 +8,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 const Vector = q.Vector;
@@ -68,8 +69,8 @@ pub fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) callconv(.c) v
     if (tspeed == 0)
         q.objerror(S("No speed is defined!"));
 
-    self.set(q.think1, func);
-    self.set(q.finaldest, tdest);
+    self.set(g.think1, func);
+    self.set(g.finaldest, tdest);
     self.think = q.func(SUB_CalcMoveDone);
 
     if (q.veq(tdest, self.origin)) {
@@ -100,11 +101,11 @@ pub fn SUB_CalcMove(tdest: Vector, tspeed: f32, func: q.Function) callconv(.c) v
 /// After moving, set origin to exact final destination
 pub fn SUB_CalcMoveDone() callconv(.c) void {
     const self = q.me();
-    q.setorigin(self, self.get(q.finaldest));
+    q.setorigin(self, self.get(g.finaldest));
     self.velocity = q.vec(0, 0, 0);
     self.nextthink = -1;
-    if (!q.fnIsNull(self.get(q.think1)))
-        self.get(q.think1)();
+    if (!q.fnIsNull(self.get(g.think1)))
+        self.get(g.think1).?();
 }
 
 /// SUB_CalcAngleMove
@@ -141,26 +142,26 @@ pub fn SUB_CalcAngleMove(destangle: Vector, tspeed: f32, func: q.Function) callc
     // scale the destdelta vector by the time spent traveling to get velocity
     self.avelocity = q.scale(destdelta, 1 / traveltime);
 
-    self.set(q.think1, func);
-    self.set(q.finalangle, destangle);
+    self.set(g.think1, func);
+    self.set(g.finalangle, destangle);
     self.think = q.func(SUB_CalcAngleMoveDone);
 }
 
 /// After rotating, set angle to exact final angle
 pub fn SUB_CalcAngleMoveDone() callconv(.c) void {
     const self = q.me();
-    self.angles = self.get(q.finalangle);
+    self.angles = self.get(g.finalangle);
     self.avelocity = q.vec(0, 0, 0);
     self.nextthink = -1;
-    if (!q.fnIsNull(self.get(q.think1)))
-        self.get(q.think1)();
+    if (!q.fnIsNull(self.get(g.think1)))
+        self.get(g.think1).?();
 }
 
 //=============================================================================
 
 pub fn DelayThink() callconv(.c) void {
     const self = q.me();
-    q.activator.set(self.enemy);
+    g.activator.set(self.enemy);
     SUB_UseTargets();
     q.remove(self);
 }
@@ -186,15 +187,15 @@ pub fn SUB_UseTargets() callconv(.c) void {
     //
     // check for a delay
     //
-    if (self.get(q.delay) != 0) {
+    if (self.get(g.delay) != 0) {
         // create a temp object to fire at a later time
         const t = q.spawn();
         t.classname = S("DelayedUse");
-        t.nextthink = q.time.get() + self.get(q.delay);
+        t.nextthink = q.time.get() + self.get(g.delay);
         t.think = q.func(DelayThink);
-        t.enemy = q.activator.get();
+        t.enemy = g.activator.get();
         t.message = self.message;
-        t.set(q.killtarget, self.get(q.killtarget));
+        t.set(g.killtarget, self.get(g.killtarget));
         t.target = self.target;
         return;
     }
@@ -202,7 +203,7 @@ pub fn SUB_UseTargets() callconv(.c) void {
     //
     // print the message
     //
-    const activator = q.activator.get();
+    const activator = g.activator.get();
     if (activator.classname.eql(S("player")) and self.message.neq(S(""))) {
         q.centerprint(activator, self.message);
         if (self.noise.isNull())
@@ -212,10 +213,10 @@ pub fn SUB_UseTargets() callconv(.c) void {
     //
     // kill the killtagets
     //
-    if (!self.get(q.killtarget).isNull()) {
+    if (!self.get(g.killtarget).isNull()) {
         var t = q.world.get();
         while (true) {
-            t = q.find(t, .targetname, self.get(q.killtarget));
+            t = q.find(t, .targetname, self.get(g.killtarget));
             if (t.isNull())
                 return;
             q.remove(t);
@@ -226,7 +227,7 @@ pub fn SUB_UseTargets() callconv(.c) void {
     // fire targets
     //
     if (!self.target.isNull()) {
-        const act = q.activator.get();
+        const act = g.activator.get();
         var t = q.world.get();
         while (true) {
             t = q.find(t, .targetname, self.target);
@@ -239,11 +240,11 @@ pub fn SUB_UseTargets() callconv(.c) void {
             q.other.set(stemp);
             if (q.fnNeq(t.use, q.func(SUB_Null))) {
                 if (!q.fnIsNull(t.use))
-                    t.use();
+                    t.use.?();
             }
             q.self.set(stemp);
             q.other.set(otemp);
-            q.activator.set(act);
+            g.activator.set(act);
         }
     }
 }

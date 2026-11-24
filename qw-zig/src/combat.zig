@@ -8,6 +8,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 const String = q.String;
@@ -62,7 +63,7 @@ pub fn Killed(targ: Entity, attacker: Entity) callconv(.c) void {
         self.health = -99; // don't let sbar look bad if a player
 
     if (self.movetype == q.MOVETYPE_PUSH or self.movetype == q.MOVETYPE_NONE) { // doors, triggers, etc
-        self.get(q.th_die)();
+        self.get(g.th_die).?();
         q.self.set(oself);
         return;
     }
@@ -83,7 +84,7 @@ pub fn Killed(targ: Entity, attacker: Entity) callconv(.c) void {
 
     // (SERVER: monster_death_use(); is commented out in the original.)
 
-    self.get(q.th_die)();
+    self.get(g.th_die).?();
 
     q.self.set(oself);
 }
@@ -99,11 +100,11 @@ pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32)
         return;
 
     // used by buttons and triggers to set activator for target firing
-    q.damage_attacker.set(attacker);
+    g.damage_attacker.set(attacker);
 
     // check for quad damage powerup on the attacker
-    if (attacker.get(q.super_damage_finished) > q.time.get() and inflictor.classname.neq(S("door"))) {
-        if (q.deathmatch.get() == 4) {
+    if (attacker.get(g.super_damage_finished) > q.time.get() and inflictor.classname.neq(S("door"))) {
+        if (g.deathmatch.get() == 4) {
             damage = damage * 8;
         } else {
             damage = damage * 4;
@@ -130,7 +131,7 @@ pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32)
         targ.dmg_inflictor = inflictor;
     }
 
-    q.damage_inflictor.set(inflictor);
+    g.damage_inflictor.set(inflictor);
 
     // figure momentum add
     if (inflictor.neq(q.world.get()) and targ.movetype == q.MOVETYPE_WALK) {
@@ -147,19 +148,19 @@ pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32)
         targ.velocity = targ.velocity + q.scale(dir, damage * 8);
 
         // Rocket Jump modifiers
-        if (q.rj.get() > 1 and (attacker.classname.eql(S("player")) and targ.classname.eql(S("player"))) and attacker.netname.eql(targ.netname))
-            targ.velocity = targ.velocity + q.scale(dir, damage * q.rj.get());
+        if (g.rj.get() > 1 and (attacker.classname.eql(S("player")) and targ.classname.eql(S("player"))) and attacker.netname.eql(targ.netname))
+            targ.velocity = targ.velocity + q.scale(dir, damage * g.rj.get());
     }
 
     // check for godmode or invincibility
     if (q.has(targ.flags, q.FL_GODMODE))
         return;
-    if (targ.get(q.invincible_finished) >= q.time.get()) {
+    if (targ.get(g.invincible_finished) >= q.time.get()) {
         // (The original checks and sets `self.invincible_sound`, not `targ`'s.)
         const self = q.me();
-        if (self.get(q.invincible_sound) < q.time.get()) {
+        if (self.get(g.invincible_sound) < q.time.get()) {
             q.sound(targ, q.CHAN_ITEM, S("items/protect3.wav"), 1, q.ATTN_NORM);
-            self.set(q.invincible_sound, q.time.get() + 2);
+            self.set(g.invincible_sound, q.time.get() + 2);
         }
         return;
     }
@@ -169,12 +170,12 @@ pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32)
     const attackerteam = q.infokey(attacker, S("team"));
     const targteam = q.infokey(targ, S("team"));
 
-    if (q.teamplay.get() == 1 and targteam.eql(attackerteam) and
+    if (g.teamplay.get() == 1 and targteam.eql(attackerteam) and
         attacker.classname.eql(S("player")) and attackerteam.neq(S("")) and
         inflictor.classname.neq(S("door")))
         return;
 
-    if (q.teamplay.get() == 3 and targteam.eql(attackerteam) and
+    if (g.teamplay.get() == 3 and targteam.eql(attackerteam) and
         attacker.classname.eql(S("player")) and attackerteam.neq(S("")) and
         targ.neq(attacker) and inflictor.classname.neq(S("door")))
         return;
@@ -193,8 +194,8 @@ pub fn T_Damage(targ: Entity, inflictor: Entity, attacker: Entity, damage_: f32)
 
     // (SERVER: the monster reaction code is commented out in the original.)
 
-    if (!q.fnIsNull(targ.get(q.th_pain))) {
-        q.callAs(q.ThPain, targ.get(q.th_pain))(attacker, take);
+    if (!q.fnIsNull(targ.get(g.th_pain))) {
+        q.callAs(g.ThPain, targ.get(g.th_pain).?)(attacker, take);
     }
 
     q.self.set(oldself);
@@ -222,7 +223,7 @@ pub fn T_RadiusDamage(inflictor: Entity, attacker: Entity, damage: f32, ignore: 
                     points = points * 0.5;
                 if (points > 0) {
                     if (CanDamage(head, inflictor) != 0) {
-                        head.set(q.deathtype, dtype);
+                        head.set(g.deathtype, dtype);
                         T_Damage(head, inflictor, attacker, points);
                     }
                 }

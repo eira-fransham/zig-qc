@@ -8,6 +8,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 const Vector = q.Vector;
@@ -50,9 +51,9 @@ pub fn W_FireAxe() callconv(.c) void {
 
     const trace_ent = q.trace_ent.get();
     if (trace_ent.takedamage != 0) {
-        trace_ent.set(q.axhitme, 1);
+        trace_ent.set(g.axhitme, 1);
         SpawnBlood(org, 20);
-        if (q.deathmatch.get() > 3) {
+        if (g.deathmatch.get() > 3) {
             combat.T_Damage(trace_ent, self, self, 75);
         } else {
             combat.T_Damage(trace_ent, self, self, 20);
@@ -260,7 +261,7 @@ pub fn W_FireShotgun() callconv(.c) void {
     q.msg_entity.set(self);
     q.WriteByte(q.MSG_ONE, q.SVC_SMALLKICK);
 
-    if (q.deathmatch.get() != 4) {
+    if (g.deathmatch.get() != 4) {
         self.ammo_shells = self.ammo_shells - 1;
         self.currentammo = self.ammo_shells;
     }
@@ -283,7 +284,7 @@ pub fn W_FireSuperShotgun() callconv(.c) void {
     q.msg_entity.set(self);
     q.WriteByte(q.MSG_ONE, q.SVC_BIGKICK);
 
-    if (q.deathmatch.get() != 4) {
+    if (g.deathmatch.get() != 4) {
         self.ammo_shells = self.ammo_shells - 2;
         self.currentammo = self.ammo_shells;
     }
@@ -321,10 +322,10 @@ pub fn T_MissileTouch() callconv(.c) void {
     if (other.eql(self.owner))
         return; // don't explode on owner
 
-    if (self.get(q.voided) != 0) {
+    if (self.get(g.voided) != 0) {
         return;
     }
-    self.set(q.voided, 1);
+    self.set(g.voided, 1);
 
     if (q.pointcontents(self.origin) == q.CONTENT_SKY) {
         q.remove(self);
@@ -334,7 +335,7 @@ pub fn T_MissileTouch() callconv(.c) void {
     const damg = 100 + q.random() * 20;
 
     if (other.health != 0) {
-        other.set(q.deathtype, S("rocket"));
+        other.set(g.deathtype, S("rocket"));
         combat.T_Damage(other, self, self.owner, damg);
     }
 
@@ -361,7 +362,7 @@ pub fn T_MissileTouch() callconv(.c) void {
 pub fn W_FireRocket() callconv(.c) void {
     const self = q.me();
 
-    if (q.deathmatch.get() != 4) {
+    if (g.deathmatch.get() != 4) {
         self.ammo_rockets = self.ammo_rockets - 1;
         self.currentammo = self.ammo_rockets;
     }
@@ -385,7 +386,7 @@ pub fn W_FireRocket() callconv(.c) void {
     newmis.angles = q.vectoangles(newmis.velocity);
 
     newmis.touch = q.func(T_MissileTouch);
-    newmis.set(q.voided, 0);
+    newmis.set(g.voided, 0);
 
     // set newmis duration
     newmis.nextthink = q.time.get() + 5;
@@ -463,9 +464,9 @@ pub fn W_FireLightning() callconv(.c) void {
 
     // explode if under water
     if (self.waterlevel > 1) {
-        if (q.deathmatch.get() > 3) {
+        if (g.deathmatch.get() > 3) {
             if (q.random() <= 0.5) {
-                self.set(q.deathtype, S("selfwater"));
+                self.set(g.deathtype, S("selfwater"));
                 combat.T_Damage(self, self, self.owner, 4000);
             } else {
                 const cells = self.ammo_cells;
@@ -483,14 +484,14 @@ pub fn W_FireLightning() callconv(.c) void {
         }
     }
 
-    if (self.get(q.t_width) < q.time.get()) {
+    if (self.get(g.t_width) < q.time.get()) {
         q.sound(self, q.CHAN_WEAPON, S("weapons/lhit.wav"), 1, q.ATTN_NORM);
-        self.set(q.t_width, q.time.get() + 0.6);
+        self.set(g.t_width, q.time.get() + 0.6);
     }
     q.msg_entity.set(self);
     q.WriteByte(q.MSG_ONE, q.SVC_SMALLKICK);
 
-    if (q.deathmatch.get() != 4) {
+    if (g.deathmatch.get() != 4) {
         self.ammo_cells = self.ammo_cells - 1;
         self.currentammo = self.ammo_cells;
     }
@@ -518,10 +519,10 @@ pub fn W_FireLightning() callconv(.c) void {
 
 pub fn GrenadeExplode() callconv(.c) void {
     const self = q.me();
-    if (self.get(q.voided) != 0) {
+    if (self.get(g.voided) != 0) {
         return;
     }
-    self.set(q.voided, 1);
+    self.set(g.voided, 1);
 
     combat.T_RadiusDamage(self, self.owner, 120, q.world.get(), S("grenade"));
 
@@ -554,7 +555,7 @@ pub fn GrenadeTouch() callconv(.c) void {
 pub fn W_FireGrenade() callconv(.c) void {
     const self = q.me();
 
-    if (q.deathmatch.get() != 4) {
+    if (g.deathmatch.get() != 4) {
         self.ammo_rockets = self.ammo_rockets - 1;
         self.currentammo = self.ammo_rockets;
     }
@@ -566,7 +567,7 @@ pub fn W_FireGrenade() callconv(.c) void {
 
     q.newmis.set(q.spawn());
     const newmis = q.newmis.get();
-    newmis.set(q.voided, 0);
+    newmis.set(g.voided, 0);
     newmis.owner = self;
     newmis.movetype = q.MOVETYPE_BOUNCE;
     newmis.solid = q.SOLID_BBOX;
@@ -592,9 +593,9 @@ pub fn W_FireGrenade() callconv(.c) void {
     newmis.touch = q.func(GrenadeTouch);
 
     // set newmis duration
-    if (q.deathmatch.get() == 4) {
+    if (g.deathmatch.get() == 4) {
         newmis.nextthink = q.time.get() + 2.5;
-        self.set(q.attack_finished, q.time.get() + 1.1);
+        self.set(g.attack_finished, q.time.get() + 1.1);
         //      self.health = self.health - 1;
         combat.T_Damage(self, self, self.owner, 10);
     } else {
@@ -617,7 +618,7 @@ pub fn launch_spike(org: Vector, dir: Vector) callconv(.c) void {
     const self = q.me();
     q.newmis.set(q.spawn());
     const newmis = q.newmis.get();
-    newmis.set(q.voided, 0);
+    newmis.set(g.voided, 0);
     newmis.owner = self;
     newmis.movetype = q.MOVETYPE_FLYMISSILE;
     newmis.solid = q.SOLID_BBOX;
@@ -639,8 +640,8 @@ pub fn W_FireSuperSpikes() callconv(.c) void {
     const self = q.me();
 
     q.sound(self, q.CHAN_WEAPON, S("weapons/spike2.wav"), 1, q.ATTN_NORM);
-    self.set(q.attack_finished, q.time.get() + 0.2);
-    if (q.deathmatch.get() != 4) {
+    self.set(g.attack_finished, q.time.get() + 0.2);
+    if (g.deathmatch.get() != 4) {
         self.ammo_nails = self.ammo_nails - 2;
         self.currentammo = self.ammo_nails;
     }
@@ -671,8 +672,8 @@ pub fn W_FireSpikes(ox: f32) callconv(.c) void {
     }
 
     q.sound(self, q.CHAN_WEAPON, S("weapons/rocket1i.wav"), 1, q.ATTN_NORM);
-    self.set(q.attack_finished, q.time.get() + 0.2);
-    if (q.deathmatch.get() != 4) {
+    self.set(g.attack_finished, q.time.get() + 0.2);
+    if (g.deathmatch.get() != 4) {
         self.ammo_nails = self.ammo_nails - 1;
         self.currentammo = self.ammo_nails;
     }
@@ -692,10 +693,10 @@ pub fn spike_touch() callconv(.c) void {
     if (other.eql(self.owner))
         return;
 
-    if (self.get(q.voided) != 0) {
+    if (self.get(g.voided) != 0) {
         return;
     }
-    self.set(q.voided, 1);
+    self.set(g.voided, 1);
 
     if (other.solid == q.SOLID_TRIGGER)
         return; // trigger field, do nothing
@@ -708,7 +709,7 @@ pub fn spike_touch() callconv(.c) void {
     // hit something that bleeds
     if (other.takedamage != 0) {
         spawn_touchblood(9);
-        other.set(q.deathtype, S("nail"));
+        other.set(g.deathtype, S("nail"));
         combat.T_Damage(other, self, self.owner, 9);
     } else {
         q.WriteByte(q.MSG_MULTICAST, q.SVC_TEMPENTITY);
@@ -736,10 +737,10 @@ pub fn superspike_touch() callconv(.c) void {
     if (other.eql(self.owner))
         return;
 
-    if (self.get(q.voided) != 0) {
+    if (self.get(g.voided) != 0) {
         return;
     }
-    self.set(q.voided, 1);
+    self.set(g.voided, 1);
 
     if (other.solid == q.SOLID_TRIGGER)
         return; // trigger field, do nothing
@@ -752,7 +753,7 @@ pub fn superspike_touch() callconv(.c) void {
     // hit something that bleeds
     if (other.takedamage != 0) {
         spawn_touchblood(18);
-        other.set(q.deathtype, S("supernail"));
+        other.set(g.deathtype, S("supernail"));
         combat.T_Damage(other, self, self.owner, 18);
     } else {
         const o = self.origin;
@@ -877,11 +878,11 @@ pub fn W_Attack() callconv(.c) void {
         return;
 
     q.makevectors(self.v_angle); // calculate forward angle for velocity
-    self.set(q.show_hostile, q.time.get() + 1); // wake monsters up
+    self.set(g.show_hostile, q.time.get() + 1); // wake monsters up
 
     const weapon = self.weapon;
     if (weapon == q.IT_AXE) {
-        self.set(q.attack_finished, q.time.get() + 0.5);
+        self.set(g.attack_finished, q.time.get() + 0.5);
         q.sound(self, q.CHAN_WEAPON, S("weapons/ax1.wav"), 1, q.ATTN_NORM);
         const r = q.random();
         if (r < 0.25) {
@@ -895,11 +896,11 @@ pub fn W_Attack() callconv(.c) void {
         }
     } else if (weapon == q.IT_SHOTGUN) {
         player.player_shot1();
-        self.set(q.attack_finished, q.time.get() + 0.5);
+        self.set(g.attack_finished, q.time.get() + 0.5);
         W_FireShotgun();
     } else if (weapon == q.IT_SUPER_SHOTGUN) {
         player.player_shot1();
-        self.set(q.attack_finished, q.time.get() + 0.7);
+        self.set(g.attack_finished, q.time.get() + 0.7);
         W_FireSuperShotgun();
     } else if (weapon == q.IT_NAILGUN) {
         player.player_nail1();
@@ -907,14 +908,14 @@ pub fn W_Attack() callconv(.c) void {
         player.player_nail1();
     } else if (weapon == q.IT_GRENADE_LAUNCHER) {
         player.player_rocket1();
-        self.set(q.attack_finished, q.time.get() + 0.6);
+        self.set(g.attack_finished, q.time.get() + 0.6);
         W_FireGrenade();
     } else if (weapon == q.IT_ROCKET_LAUNCHER) {
         player.player_rocket1();
-        self.set(q.attack_finished, q.time.get() + 0.8);
+        self.set(g.attack_finished, q.time.get() + 0.8);
         W_FireRocket();
     } else if (weapon == q.IT_LIGHTNING) {
-        self.set(q.attack_finished, q.time.get() + 0.1);
+        self.set(g.attack_finished, q.time.get() + 0.1);
         q.sound(self, q.CHAN_AUTO, S("weapons/lstart.wav"), 1, q.ATTN_NORM);
         player.player_light1();
     }
@@ -1134,7 +1135,7 @@ pub fn ImpulseCommands() callconv(.c) void {
 /// Called every frame so impulse events can be handled as well as possible
 pub fn W_WeaponFrame() callconv(.c) void {
     const self = q.me();
-    if (q.time.get() < self.get(q.attack_finished))
+    if (q.time.get() < self.get(g.attack_finished))
         return;
 
     ImpulseCommands();
@@ -1151,9 +1152,9 @@ pub fn W_WeaponFrame() callconv(.c) void {
 /// Plays sound if needed
 pub fn SuperDamageSound() callconv(.c) void {
     const self = q.me();
-    if (self.get(q.super_damage_finished) > q.time.get()) {
-        if (self.get(q.super_sound) < q.time.get()) {
-            self.set(q.super_sound, q.time.get() + 1);
+    if (self.get(g.super_damage_finished) > q.time.get()) {
+        if (self.get(g.super_sound) < q.time.get()) {
+            self.set(g.super_sound, q.time.get() + 1);
             q.sound(self, q.CHAN_BODY, S("items/damage3.wav"), 1, q.ATTN_NORM);
         }
     }

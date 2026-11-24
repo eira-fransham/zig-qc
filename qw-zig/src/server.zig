@@ -10,6 +10,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 
 // QuakeWorld has no monsters; their spawn functions remove the entity.
@@ -91,7 +92,7 @@ pub export fn event_lightning() void {
 /// Something has bumped into a movetarget.  If it is a monster
 /// moving towards it, change the next destination and continue.
 pub fn t_movetarget() callconv(.c) void {
-    if (q.other.get().get(q.movetarget).neq(q.me()))
+    if (q.other.get().get(g.movetarget).neq(q.me()))
         return;
 
     if (!q.other.get().enemy.isNull())
@@ -107,12 +108,12 @@ pub fn t_movetarget() callconv(.c) void {
         q.sound(self, q.CHAN_VOICE, S("ogre/ogdrag.wav"), 1, q.ATTN_IDLE); // play chainsaw drag sound
 
     //dprint ("t_movetarget\n");
-    self.set(q.movetarget, q.find(q.world.get(), .targetname, other.target));
-    self.goalentity = self.get(q.movetarget);
+    self.set(g.movetarget, q.find(q.world.get(), .targetname, other.target));
+    self.goalentity = self.get(g.movetarget);
     self.ideal_yaw = q.vectoyaw(@as(q.Vector, self.goalentity.origin) - self.origin);
-    if (self.get(q.movetarget).isNull()) {
-        self.set(q.pausetime, q.time.get() + 999999);
-        self.get(q.th_stand)();
+    if (self.get(g.movetarget).isNull()) {
+        self.set(g.pausetime, q.time.get() + 999999);
+        self.get(g.th_stand).?();
         return;
     }
 }

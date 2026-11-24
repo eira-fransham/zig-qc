@@ -30,6 +30,11 @@ pub const INDIRECT_TABLE: &str = "__indirect_function_table";
 /// An exported (data) symbol naming the system defs to use, e.g.
 /// `"quakeworld"`. Defaults to vanilla NetQuake.
 pub const TARGET_EXPORT: &str = "__quakec_target";
+/// Prefix of exported (data) symbols that declare a user field, as
+/// `__quakec_field:<type>:<name>`; see `declareUserDefs` in `defs.zig`.
+pub const DECLARE_FIELD_PREFIX: &str = "__quakec_field:";
+/// Like [`DECLARE_FIELD_PREFIX`], for user globals.
+pub const DECLARE_GLOBAL_PREFIX: &str = "__quakec_global:";
 /// The value given to the imported `__table_base`, so that function pointers
 /// are plain table indices.
 pub const TABLE_BASE: u64 = 0;
@@ -167,8 +172,15 @@ impl Ctx<'_> {
             .with_context(|| {
                 format!("{what} name at address {addr} is not a valid QuakeC identifier")
             })?;
+        self.declare_user(&name, ty, field)?;
+        Ok(name)
+    }
+
+    /// Record the user global or field `name`, of type `ty`.
+    pub fn declare_user(&mut self, name: &str, ty: QcType, field: bool) -> Result<()> {
+        let what = if field { "field" } else { "global" };
         ensure!(
-            !self.defs.is_sys_name(&name),
+            !self.defs.is_sys_name(name),
             "user {what} `{name}` has the same name as a system global or field"
         );
         let map = if field {
@@ -176,17 +188,17 @@ impl Ctx<'_> {
         } else {
             &mut self.user_globals
         };
-        match map.get(&name) {
+        match map.get(name) {
             Some(&t) if t != ty => bail!(
                 "user {what} `{name}` is accessed as both {} and {}",
                 t.name(),
                 ty.name()
             ),
             _ => {
-                map.insert(name.clone(), ty);
+                map.insert(name.to_string(), ty);
             }
         }
-        Ok(name)
+        Ok(())
     }
 
     /// The local functions, in index order.
@@ -352,6 +364,36 @@ pub fn translate(wasm: &[u8], opts: &Options) -> Result<Output> {
             _ => None,
         })
         .collect();
+    // Exported data named `__quakec_field:<type>:<name>` or
+    // `__quakec_global:<type>:<name>` declares a user field or global even
+    // if no code uses it (e.g. fields only set by maps).
+    for export in &module.exports {
+        let (field, rest) = if let Some(r) = export.name.strip_prefix(DECLARE_FIELD_PREFIX) {
+            (true, r)
+        } else if let Some(r) = export.name.strip_prefix(DECLARE_GLOBAL_PREFIX) {
+            (false, r)
+        } else {
+            continue;
+        };
+        let (ty, name) = rest
+            .split_once(':')
+            .with_context(|| format!("malformed declaration `{}`", export.name))?;
+        let ty = match ty {
+            "float" => QcType::Float,
+            "vector" => QcType::Vector,
+            "string" => QcType::String,
+            "entity" => QcType::Entity,
+            "function" => QcType::Func,
+            other => bail!("unknown type `{other}` in declaration `{}`", export.name),
+        };
+        ensure!(
+            is_identifier(name),
+            "`{name}` in declaration `{}` is not a valid QuakeC identifier",
+            export.name
+        );
+        ctx.declare_user(name, ty, field)?;
+    }
+
     for (g, _) in module.globals.entries() {
         if !imported_globals.contains(&g) && !exported_globals.contains(&g) {
             let name = format!("__wasm_g{}", ctx.wasm_globals.len());

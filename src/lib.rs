@@ -12,5 +12,6 @@ pub mod qc;
 pub mod stack;
 pub mod sysdefs;
 pub mod translate;
+pub mod zigdefs;
 
 pub use translate::{Options, Output, translate};

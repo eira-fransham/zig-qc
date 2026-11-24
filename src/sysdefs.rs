@@ -40,15 +40,18 @@ pub struct Builtin {
     pub number: u32,
     pub ret: QcType,
     pub params: &'static [QcType],
+    /// Parameter names, as in `defs.qc` (used for the generated `defs.zig`).
+    pub param_names: &'static [&'static str],
 }
 
 macro_rules! builtins {
-    ($($num:literal $name:literal : $ret:ident ( $($p:ident),* );)*) => {
+    ($($num:literal $name:literal : $ret:ident ( $($pn:literal : $p:ident),* );)*) => {
         &[$(Builtin {
             name: $name,
             number: $num,
             ret: QcType::$ret,
             params: &[$(QcType::$p),*],
+            param_names: &[$($pn),*],
         }),*]
     };
 }
@@ -204,71 +207,74 @@ pub static VANILLA: SysDefs = SysDefs {
         ("string", "noise3"),
     ],
     builtins: builtins! {
-    1 "makevectors": Void(Vector);
-    2 "setorigin": Void(Entity, Vector);
-    3 "setmodel": Void(Entity, String);
-    4 "setsize": Void(Entity, Vector, Vector);
+    1 "makevectors": Void("ang": Vector);
+    2 "setorigin": Void("e": Entity, "o": Vector);
+    3 "setmodel": Void("e": Entity, "m": String);
+    4 "setsize": Void("e": Entity, "min": Vector, "max": Vector);
     6 "break": Void();
     7 "random": Float();
-    8 "sound": Void(Entity, Float, String, Float, Float);
-    9 "normalize": Vector(Vector);
-    10 "error": Void(String);
-    11 "objerror": Void(String);
-    12 "vlen": Float(Vector);
-    13 "vectoyaw": Float(Vector);
+    8 "sound": Void("e": Entity, "chan": Float, "samp": String, "vol": Float, "atten": Float);
+    9 "normalize": Vector("v": Vector);
+    10 "error": Void("e": String);
+    11 "objerror": Void("e": String);
+    12 "vlen": Float("v": Vector);
+    13 "vectoyaw": Float("v": Vector);
     14 "spawn": Entity();
-    15 "remove": Void(Entity);
-    16 "traceline": Void(Vector, Vector, Float, Entity);
+    15 "remove": Void("e": Entity);
+    16 "traceline": Void("v1": Vector, "v2": Vector, "nomonsters": Float, "forent": Entity);
     17 "checkclient": Entity();
-    18 "find": Entity(Entity, StringField, String);
-    19 "precache_sound": String(String);
-    20 "precache_model": String(String);
-    21 "stuffcmd": Void(Entity, String);
-    22 "findradius": Entity(Vector, Float);
-    23 "bprint": Void(String);
-    24 "sprint": Void(Entity, String);
-    25 "dprint": Void(String);
-    26 "ftos": String(Float);
-    27 "vtos": String(Vector);
+    18 "find": Entity("start": Entity, "fld": StringField, "match": String);
+    19 "precache_sound": String("s": String);
+    20 "precache_model": String("s": String);
+    21 "stuffcmd": Void("client": Entity, "s": String);
+    22 "findradius": Entity("org": Vector, "rad": Float);
+    23 "bprint": Void("s": String);
+    24 "sprint": Void("client": Entity, "s": String);
+    25 "dprint": Void("s": String);
+    26 "ftos": String("f": Float);
+    27 "vtos": String("v": Vector);
     28 "coredump": Void();
     29 "traceon": Void();
     30 "traceoff": Void();
-    31 "eprint": Void(Entity);
-    32 "walkmove": Float(Float, Float);
+    31 "eprint": Void("e": Entity);
+    32 "walkmove": Float("yaw": Float, "dist": Float);
     34 "droptofloor": Float();
-    35 "lightstyle": Void(Float, String);
-    36 "rint": Float(Float);
-    37 "floor": Float(Float);
-    38 "ceil": Float(Float);
-    40 "checkbottom": Float(Entity);
-    41 "pointcontents": Float(Vector);
-    43 "fabs": Float(Float);
-    44 "aim": Vector(Entity, Float);
-    45 "cvar": Float(String);
-    46 "localcmd": Void(String);
-    47 "nextent": Entity(Entity);
-    48 "particle": Void(Vector, Vector, Float, Float);
+    35 "lightstyle": Void("style": Float, "value": String);
+    36 "rint": Float("v": Float);
+    37 "floor": Float("v": Float);
+    38 "ceil": Float("v": Float);
+    40 "checkbottom": Float("e": Entity);
+    41 "pointcontents": Float("v": Vector);
+    43 "fabs": Float("f": Float);
+    44 "aim": Vector("e": Entity, "speed": Float);
+    45 "cvar": Float("s": String);
+    46 "localcmd": Void("s": String);
+    47 "nextent": Entity("e": Entity);
+    48 "particle": Void("o": Vector, "d": Vector, "color": Float, "count": Float);
     49 "ChangeYaw": Void();
-    51 "vectoangles": Vector(Vector);
-    52 "WriteByte": Void(Float, Float);
-    53 "WriteChar": Void(Float, Float);
-    54 "WriteShort": Void(Float, Float);
-    55 "WriteLong": Void(Float, Float);
-    56 "WriteCoord": Void(Float, Float);
-    57 "WriteAngle": Void(Float, Float);
-    58 "WriteString": Void(Float, String);
-    59 "WriteEntity": Void(Float, Entity);
-    67 "movetogoal": Void(Float);
-    68 "precache_file": String(String);
-    69 "makestatic": Void(Entity);
-    70 "changelevel": Void(String);
-    72 "cvar_set": Void(String, String);
-    73 "centerprint": Void(Entity, String);
-    74 "ambientsound": Void(Vector, String, Float, Float);
-    75 "precache_model2": String(String);
-    76 "precache_sound2": String(String);
-    77 "precache_file2": String(String);
-    78 "setspawnparms": Void(Entity);
+    51 "vectoangles": Vector("v": Vector);
+    52 "WriteByte": Void("to": Float, "f": Float);
+    53 "WriteChar": Void("to": Float, "f": Float);
+    54 "WriteShort": Void("to": Float, "f": Float);
+    55 "WriteLong": Void("to": Float, "f": Float);
+    56 "WriteCoord": Void("to": Float, "f": Float);
+    57 "WriteAngle": Void("to": Float, "f": Float);
+    58 "WriteString": Void("to": Float, "s": String);
+    59 "WriteEntity": Void("to": Float, "s": Entity);
+    67 "movetogoal": Void("step": Float);
+    68 "precache_file": String("s": String);
+    69 "makestatic": Void("e": Entity);
+    70 "changelevel": Void("s": String);
+    72 "cvar_set": Void("var": String, "val": String);
+    73 "centerprint": Void("client": Entity, "s": String);
+    // LibreQuake's `defs.qc` (the engine concatenates all of the arguments).
+    73 "centerprint2": Void("client": Entity, "s": String, "s2": String);
+    73 "centerprint3": Void("client": Entity, "s": String, "s2": String, "s3": String);
+    74 "ambientsound": Void("pos": Vector, "samp": String, "vol": Float, "atten": Float);
+    75 "precache_model2": String("s": String);
+    76 "precache_sound2": String("s": String);
+    77 "precache_file2": String("s": String);
+    78 "setspawnparms": Void("e": Entity);
     },
 };
 
@@ -408,74 +414,74 @@ pub static QUAKEWORLD: SysDefs = SysDefs {
         ("string", "noise3"),
     ],
     builtins: builtins! {
-    1 "makevectors": Void(Vector);
-    2 "setorigin": Void(Entity, Vector);
-    3 "setmodel": Void(Entity, String);
-    4 "setsize": Void(Entity, Vector, Vector);
+    1 "makevectors": Void("ang": Vector);
+    2 "setorigin": Void("e": Entity, "o": Vector);
+    3 "setmodel": Void("e": Entity, "m": String);
+    4 "setsize": Void("e": Entity, "min": Vector, "max": Vector);
     6 "break": Void();
     7 "random": Float();
-    8 "sound": Void(Entity, Float, String, Float, Float);
-    9 "normalize": Vector(Vector);
-    10 "error": Void(String);
-    11 "objerror": Void(String);
-    12 "vlen": Float(Vector);
-    13 "vectoyaw": Float(Vector);
+    8 "sound": Void("e": Entity, "chan": Float, "samp": String, "vol": Float, "atten": Float);
+    9 "normalize": Vector("v": Vector);
+    10 "error": Void("e": String);
+    11 "objerror": Void("e": String);
+    12 "vlen": Float("v": Vector);
+    13 "vectoyaw": Float("v": Vector);
     14 "spawn": Entity();
-    15 "remove": Void(Entity);
-    16 "traceline": Void(Vector, Vector, Float, Entity);
+    15 "remove": Void("e": Entity);
+    16 "traceline": Void("v1": Vector, "v2": Vector, "nomonsters": Float, "forent": Entity);
     17 "checkclient": Entity();
-    18 "find": Entity(Entity, StringField, String);
-    19 "precache_sound": String(String);
-    20 "precache_model": String(String);
-    21 "stuffcmd": Void(Entity, String);
-    22 "findradius": Entity(Vector, Float);
-    23 "bprint": Void(Float, String);
-    24 "sprint": Void(Entity, Float, String);
-    25 "dprint": Void(String);
-    26 "ftos": String(Float);
-    27 "vtos": String(Vector);
+    18 "find": Entity("start": Entity, "fld": StringField, "match": String);
+    19 "precache_sound": String("s": String);
+    20 "precache_model": String("s": String);
+    21 "stuffcmd": Void("client": Entity, "s": String);
+    22 "findradius": Entity("org": Vector, "rad": Float);
+    23 "bprint": Void("level": Float, "s": String);
+    24 "sprint": Void("client": Entity, "level": Float, "s": String);
+    25 "dprint": Void("s": String);
+    26 "ftos": String("f": Float);
+    27 "vtos": String("v": Vector);
     28 "coredump": Void();
     29 "traceon": Void();
     30 "traceoff": Void();
-    31 "eprint": Void(Entity);
-    32 "walkmove": Float(Float, Float);
+    31 "eprint": Void("e": Entity);
+    32 "walkmove": Float("yaw": Float, "dist": Float);
     34 "droptofloor": Float();
-    35 "lightstyle": Void(Float, String);
-    36 "rint": Float(Float);
-    37 "floor": Float(Float);
-    38 "ceil": Float(Float);
-    40 "checkbottom": Float(Entity);
-    41 "pointcontents": Float(Vector);
-    43 "fabs": Float(Float);
-    44 "aim": Vector(Entity, Float);
-    45 "cvar": Float(String);
-    46 "localcmd": Void(String);
-    47 "nextent": Entity(Entity);
+    35 "lightstyle": Void("style": Float, "value": String);
+    36 "rint": Float("v": Float);
+    37 "floor": Float("v": Float);
+    38 "ceil": Float("v": Float);
+    40 "checkbottom": Float("e": Entity);
+    41 "pointcontents": Float("v": Vector);
+    43 "fabs": Float("f": Float);
+    44 "aim": Vector("e": Entity, "speed": Float);
+    45 "cvar": Float("s": String);
+    46 "localcmd": Void("s": String);
+    47 "nextent": Entity("e": Entity);
     49 "ChangeYaw": Void();
-    51 "vectoangles": Vector(Vector);
-    52 "WriteByte": Void(Float, Float);
-    53 "WriteChar": Void(Float, Float);
-    54 "WriteShort": Void(Float, Float);
-    55 "WriteLong": Void(Float, Float);
-    56 "WriteCoord": Void(Float, Float);
-    57 "WriteAngle": Void(Float, Float);
-    58 "WriteString": Void(Float, String);
-    59 "WriteEntity": Void(Float, Entity);
-    67 "movetogoal": Void(Float);
-    68 "precache_file": String(String);
-    69 "makestatic": Void(Entity);
-    70 "changelevel": Void(String);
-    72 "cvar_set": Void(String, String);
-    73 "centerprint": Void(Entity, String);
-    74 "ambientsound": Void(Vector, String, Float, Float);
-    75 "precache_model2": String(String);
-    76 "precache_sound2": String(String);
-    77 "precache_file2": String(String);
-    78 "setspawnparms": Void(Entity);
-    79 "logfrag": Void(Entity, Entity);
-    80 "infokey": String(Entity, String);
-    81 "stof": Float(String);
-    82 "multicast": Void(Vector, Float);
+    51 "vectoangles": Vector("v": Vector);
+    52 "WriteByte": Void("to": Float, "f": Float);
+    53 "WriteChar": Void("to": Float, "f": Float);
+    54 "WriteShort": Void("to": Float, "f": Float);
+    55 "WriteLong": Void("to": Float, "f": Float);
+    56 "WriteCoord": Void("to": Float, "f": Float);
+    57 "WriteAngle": Void("to": Float, "f": Float);
+    58 "WriteString": Void("to": Float, "s": String);
+    59 "WriteEntity": Void("to": Float, "s": Entity);
+    67 "movetogoal": Void("step": Float);
+    68 "precache_file": String("s": String);
+    69 "makestatic": Void("e": Entity);
+    70 "changelevel": Void("s": String);
+    72 "cvar_set": Void("var": String, "val": String);
+    73 "centerprint": Void("client": Entity, "s": String);
+    74 "ambientsound": Void("pos": Vector, "samp": String, "vol": Float, "atten": Float);
+    75 "precache_model2": String("s": String);
+    76 "precache_sound2": String("s": String);
+    77 "precache_file2": String("s": String);
+    78 "setspawnparms": Void("e": Entity);
+    79 "logfrag": Void("killer": Entity, "killee": Entity);
+    80 "infokey": String("e": Entity, "key": String);
+    81 "stof": Float("s": String);
+    82 "multicast": Void("where": Vector, "set": Float);
     },
 };
 

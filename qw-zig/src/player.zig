@@ -10,6 +10,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const String = q.String;
 const Vector = q.Vector;
@@ -239,21 +240,21 @@ pub fn player_stand1() callconv(.c) void {
     const self = q.me();
     self.weaponframe = 0;
     if (self.velocity[0] != 0 or self.velocity[1] != 0) {
-        self.set(q.walkframe, 0);
+        self.set(g.walkframe, 0);
         player_run();
         return;
     }
 
     if (self.weapon == q.IT_AXE) {
-        if (self.get(q.walkframe) >= 12)
-            self.set(q.walkframe, 0);
-        self.frame = fr(.axstnd1) + self.get(q.walkframe);
+        if (self.get(g.walkframe) >= 12)
+            self.set(g.walkframe, 0);
+        self.frame = fr(.axstnd1) + self.get(g.walkframe);
     } else {
-        if (self.get(q.walkframe) >= 5)
-            self.set(q.walkframe, 0);
-        self.frame = fr(.stand1) + self.get(q.walkframe);
+        if (self.get(g.walkframe) >= 5)
+            self.set(g.walkframe, 0);
+        self.frame = fr(.stand1) + self.get(g.walkframe);
     }
-    self.set(q.walkframe, self.get(q.walkframe) + 1);
+    self.set(g.walkframe, self.get(g.walkframe) + 1);
 }
 
 pub fn player_run() callconv(.c) void {
@@ -261,22 +262,22 @@ pub fn player_run() callconv(.c) void {
     const self = q.me();
     self.weaponframe = 0;
     if (self.velocity[0] == 0 and self.velocity[1] == 0) {
-        self.set(q.walkframe, 0);
+        self.set(g.walkframe, 0);
         player_stand1();
         return;
     }
 
     if (self.weapon == q.IT_AXE) {
-        if (self.get(q.walkframe) == 6)
-            self.set(q.walkframe, 0);
-        self.frame = fr(.axrun1) + self.get(q.walkframe);
+        if (self.get(g.walkframe) == 6)
+            self.set(g.walkframe, 0);
+        self.frame = fr(.axrun1) + self.get(g.walkframe);
     } else {
-        if (self.get(q.walkframe) == 6)
-            self.set(q.walkframe, 0);
+        if (self.get(g.walkframe) == 6)
+            self.set(g.walkframe, 0);
         // (`self.frame` here is `$rockrun1`, set by the state prefix.)
-        self.frame = self.frame + self.get(q.walkframe);
+        self.frame = self.frame + self.get(g.walkframe);
     }
-    self.set(q.walkframe, self.get(q.walkframe) + 1);
+    self.set(g.walkframe, self.get(g.walkframe) + 1);
 }
 
 pub fn muzzleflash() callconv(.c) void {
@@ -404,7 +405,7 @@ pub fn player_nail1() callconv(.c) void {
         self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireSpikes(4);
-    self.set(q.attack_finished, q.time.get() + 0.2);
+    self.set(g.attack_finished, q.time.get() + 0.2);
 }
 pub fn player_nail2() callconv(.c) void {
     state(.nailatt2, player_nail1);
@@ -420,7 +421,7 @@ pub fn player_nail2() callconv(.c) void {
         self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireSpikes(-4);
-    self.set(q.attack_finished, q.time.get() + 0.2);
+    self.set(g.attack_finished, q.time.get() + 0.2);
 }
 
 //============================================================================
@@ -439,7 +440,7 @@ pub fn player_light1() callconv(.c) void {
         self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireLightning();
-    self.set(q.attack_finished, q.time.get() + 0.2);
+    self.set(g.attack_finished, q.time.get() + 0.2);
 }
 pub fn player_light2() callconv(.c) void {
     state(.light2, player_light1);
@@ -455,7 +456,7 @@ pub fn player_light2() callconv(.c) void {
         self.weaponframe = 1;
     weapons.SuperDamageSound();
     weapons.W_FireLightning();
-    self.set(q.attack_finished, q.time.get() + 0.2);
+    self.set(g.attack_finished, q.time.get() + 0.2);
 }
 
 //============================================================================
@@ -492,7 +493,7 @@ pub fn PainSound() callconv(.c) void {
     if (self.health < 0)
         return;
 
-    if (q.damage_attacker.get().classname.eql(S("teledeath"))) {
+    if (g.damage_attacker.get().classname.eql(S("teledeath"))) {
         q.sound(self, q.CHAN_VOICE, S("player/teledth1.wav"), 1, q.ATTN_NONE);
         return;
     }
@@ -528,17 +529,17 @@ pub fn PainSound() callconv(.c) void {
         return;
     }
 
-    if (self.get(q.pain_finished) > q.time.get()) {
-        self.set(q.axhitme, 0);
+    if (self.get(g.pain_finished) > q.time.get()) {
+        self.set(g.axhitme, 0);
         return;
     }
-    self.set(q.pain_finished, q.time.get() + 0.5);
+    self.set(g.pain_finished, q.time.get() + 0.5);
 
     // don't make multiple pain sounds right after each other
 
     // ax pain sound
-    if (self.get(q.axhitme) == 1) {
-        self.set(q.axhitme, 0);
+    if (self.get(g.axhitme) == 1) {
+        self.set(g.axhitme, 0);
         q.sound(self, q.CHAN_VOICE, S("player/axhit1.wav"), 1, q.ATTN_NORM);
         return;
     }
@@ -611,7 +612,7 @@ pub fn player_pain() callconv(.c) void {
     if (self.weaponframe != 0)
         return;
 
-    if (self.get(q.invisible_finished) > q.time.get())
+    if (self.get(g.invisible_finished) > q.time.get())
         return; // eyes don't have pain frames
 
     if (self.weapon == q.IT_AXE) {
@@ -636,12 +637,12 @@ pub fn DeathBubblesSpawn() callconv(.c) void {
     bubble.think = q.func(misc.bubble_bob);
     bubble.classname = S("bubble");
     bubble.frame = 0;
-    bubble.set(q.cnt, 0);
+    bubble.set(g.cnt, 0);
     q.setsize(bubble, q.vec(-8, -8, -8), q.vec(8, 8, 8));
     self.nextthink = q.time.get() + 0.1;
     self.think = q.func(DeathBubblesSpawn);
-    self.set(q.air_finished, self.get(q.air_finished) + 1);
-    if (self.get(q.air_finished) >= self.get(q.bubble_count))
+    self.set(g.air_finished, self.get(g.air_finished) + 1);
+    if (self.get(g.air_finished) >= self.get(g.bubble_count))
         q.remove(self);
 }
 
@@ -654,9 +655,9 @@ pub fn DeathBubbles(num_bubbles: f32) callconv(.c) void {
     bubble_spawner.solid = q.SOLID_NOT;
     bubble_spawner.nextthink = q.time.get() + 0.1;
     bubble_spawner.think = q.func(DeathBubblesSpawn);
-    bubble_spawner.set(q.air_finished, 0);
+    bubble_spawner.set(g.air_finished, 0);
     bubble_spawner.owner = self;
-    bubble_spawner.set(q.bubble_count, num_bubbles);
+    bubble_spawner.set(g.bubble_count, num_bubbles);
     return;
 }
 
@@ -695,7 +696,7 @@ pub fn PlayerDead() callconv(.c) void {
 
 pub fn VelocityForDamage(dm: f32) callconv(.c) Vector {
     const self = q.me();
-    const inflictor = q.damage_inflictor.get();
+    const inflictor = g.damage_inflictor.get();
     var v = q.vec(0, 0, 0);
 
     if (q.vlen(inflictor.velocity) > 0) {
@@ -773,12 +774,12 @@ pub fn GibPlayer() callconv(.c) void {
 
     self.deadflag = q.DEAD_DEAD;
 
-    if (q.damage_attacker.get().classname.eql(S("teledeath"))) {
+    if (g.damage_attacker.get().classname.eql(S("teledeath"))) {
         q.sound(self, q.CHAN_VOICE, S("player/teledth1.wav"), 1, q.ATTN_NONE);
         return;
     }
 
-    if (q.damage_attacker.get().classname.eql(S("teledeath2"))) {
+    if (g.damage_attacker.get().classname.eql(S("teledeath2"))) {
         q.sound(self, q.CHAN_VOICE, S("player/teledth1.wav"), 1, q.ATTN_NONE);
         return;
     }
@@ -795,35 +796,35 @@ pub fn PlayerDie() callconv(.c) void {
     self.items = self.items - q.band(self.items, q.IT_INVISIBILITY);
 
     if (q.stof(q.infokey(q.world.get(), S("dq"))) != 0) {
-        if (self.get(q.super_damage_finished) > 0) {
-            items.DropQuad(self.get(q.super_damage_finished) - q.time.get());
+        if (self.get(g.super_damage_finished) > 0) {
+            items.DropQuad(self.get(g.super_damage_finished) - q.time.get());
             q.bprint(q.PRINT_LOW, self.netname);
-            if (q.deathmatch.get() == 4) {
+            if (g.deathmatch.get() == 4) {
                 q.bprint(q.PRINT_LOW, S(" lost an OctaPower with "));
             } else {
                 q.bprint(q.PRINT_LOW, S(" lost a quad with "));
             }
-            const s = q.ftos(q.rint(self.get(q.super_damage_finished) - q.time.get()));
+            const s = q.ftos(q.rint(self.get(g.super_damage_finished) - q.time.get()));
             q.bprint(q.PRINT_LOW, s);
             q.bprint(q.PRINT_LOW, S(" seconds remaining\n"));
         }
     }
 
     if (q.stof(q.infokey(q.world.get(), S("dr"))) != 0) {
-        if (self.get(q.invisible_finished) > 0) {
+        if (self.get(g.invisible_finished) > 0) {
             q.bprint(q.PRINT_LOW, self.netname);
             q.bprint(q.PRINT_LOW, S(" lost a ring with "));
-            const s = q.ftos(q.rint(self.get(q.invisible_finished) - q.time.get()));
+            const s = q.ftos(q.rint(self.get(g.invisible_finished) - q.time.get()));
             q.bprint(q.PRINT_LOW, s);
             q.bprint(q.PRINT_LOW, S(" seconds remaining\n"));
-            items.DropRing(self.get(q.invisible_finished) - q.time.get());
+            items.DropRing(self.get(g.invisible_finished) - q.time.get());
         }
     }
 
-    self.set(q.invisible_finished, 0); // don't die as eyes
-    self.set(q.invincible_finished, 0);
-    self.set(q.super_damage_finished, 0);
-    self.set(q.radsuit_finished, 0);
+    self.set(g.invisible_finished, 0); // don't die as eyes
+    self.set(g.invincible_finished, 0);
+    self.set(g.super_damage_finished, 0);
+    self.set(g.radsuit_finished, 0);
     self.modelindex = client.modelindex_player.get(); // don't use eyes
 
     items.DropBackpack();

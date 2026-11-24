@@ -10,28 +10,29 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 
 const subs = @import("subs.zig");
 
 pub fn button_wait() callconv(.c) void {
     const self = q.me();
-    self.set(q.state, q.STATE_TOP);
-    self.nextthink = self.ltime + self.get(q.wait);
+    self.set(g.state, q.STATE_TOP);
+    self.nextthink = self.ltime + self.get(g.wait);
     self.think = q.func(button_return);
-    q.activator.set(self.enemy);
+    g.activator.set(self.enemy);
     subs.SUB_UseTargets();
     self.frame = 1; // use alternate textures
 }
 
 pub fn button_done() callconv(.c) void {
-    q.me().set(q.state, q.STATE_BOTTOM);
+    q.me().set(g.state, q.STATE_BOTTOM);
 }
 
 pub fn button_return() callconv(.c) void {
     const self = q.me();
-    self.set(q.state, q.STATE_DOWN);
-    subs.SUB_CalcMove(self.get(q.pos1), self.get(q.speed), q.func(button_done));
+    self.set(g.state, q.STATE_DOWN);
+    subs.SUB_CalcMove(self.get(g.pos1), self.get(g.speed), q.func(button_done));
     self.frame = 0; // use normal textures
     if (self.health != 0)
         self.takedamage = q.DAMAGE_YES; // can be shot again
@@ -43,17 +44,17 @@ pub fn button_blocked() callconv(.c) void {
 
 pub fn button_fire() callconv(.c) void {
     const self = q.me();
-    if (self.get(q.state) == q.STATE_UP or self.get(q.state) == q.STATE_TOP)
+    if (self.get(g.state) == q.STATE_UP or self.get(g.state) == q.STATE_TOP)
         return;
 
     q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
 
-    self.set(q.state, q.STATE_UP);
-    subs.SUB_CalcMove(self.get(q.pos2), self.get(q.speed), q.func(button_wait));
+    self.set(g.state, q.STATE_UP);
+    subs.SUB_CalcMove(self.get(g.pos2), self.get(g.speed), q.func(button_wait));
 }
 
 pub fn button_use() callconv(.c) void {
-    q.me().enemy = q.activator.get();
+    q.me().enemy = g.activator.get();
     button_fire();
 }
 
@@ -67,7 +68,7 @@ pub fn button_touch() callconv(.c) void {
 
 pub fn button_killed() callconv(.c) void {
     const self = q.me();
-    self.enemy = q.damage_attacker.get();
+    self.enemy = g.damage_attacker.get();
     self.health = self.max_health;
     self.takedamage = q.DAMAGE_NO; // wil be reset upon return
     button_fire();
@@ -120,22 +121,22 @@ pub export fn func_button() void {
 
     if (self.health != 0) {
         self.max_health = self.health;
-        self.set(q.th_die, q.func(button_killed));
+        self.set(g.th_die, q.func(button_killed));
         self.takedamage = q.DAMAGE_YES;
     } else {
         self.touch = q.func(button_touch);
     }
 
-    if (self.get(q.speed) == 0)
-        self.set(q.speed, 40);
-    if (self.get(q.wait) == 0)
-        self.set(q.wait, 1);
-    if (self.get(q.lip) == 0)
-        self.set(q.lip, 4);
+    if (self.get(g.speed) == 0)
+        self.set(g.speed, 40);
+    if (self.get(g.wait) == 0)
+        self.set(g.wait, 1);
+    if (self.get(g.lip) == 0)
+        self.set(g.lip, 4);
 
-    self.set(q.state, q.STATE_BOTTOM);
+    self.set(g.state, q.STATE_BOTTOM);
 
-    self.set(q.pos1, self.origin);
+    self.set(g.pos1, self.origin);
     const movedir = self.movedir;
-    self.set(q.pos2, self.get(q.pos1) + q.scale(movedir, q.fabs(q.dot(movedir, self.size)) - self.get(q.lip)));
+    self.set(g.pos2, self.get(g.pos1) + q.scale(movedir, q.fabs(q.dot(movedir, self.size)) - self.get(g.lip)));
 }

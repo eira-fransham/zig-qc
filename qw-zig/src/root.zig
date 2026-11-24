@@ -3,6 +3,7 @@
 
 const files = .{
     @import("defs.zig"),
+    @import("game.zig"),
     @import("subs.zig"),
     @import("combat.zig"),
     @import("items.zig"),

@@ -18,6 +18,7 @@
 //! chain.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 const Vector = q.Vector;
@@ -40,13 +41,13 @@ pub const DOOR_TOGGLE: f32 = 32;
 pub fn door_blocked() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
-    other.set(q.deathtype, S("squish"));
-    combat.T_Damage(other, self, self.goalentity, self.get(q.dmg));
+    other.set(g.deathtype, S("squish"));
+    combat.T_Damage(other, self, self.goalentity, self.get(g.dmg));
 
     // if a door has a negative wait, it would never come back if blocked,
     // so let it just squash the object to death real fast
-    if (self.get(q.wait) >= 0) {
-        if (self.get(q.state) == q.STATE_DOWN) {
+    if (self.get(g.wait) >= 0) {
+        if (self.get(g.state) == q.STATE_DOWN) {
             door_go_up();
         } else {
             door_go_down();
@@ -57,17 +58,17 @@ pub fn door_blocked() callconv(.c) void {
 pub fn door_hit_top() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_TOP);
+    self.set(g.state, q.STATE_TOP);
     if (q.has(self.spawnflags, DOOR_TOGGLE))
         return; // don't come down automatically
     self.think = q.func(door_go_down);
-    self.nextthink = self.ltime + self.get(q.wait);
+    self.nextthink = self.ltime + self.get(g.wait);
 }
 
 pub fn door_hit_bottom() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_BOTTOM);
+    self.set(g.state, q.STATE_BOTTOM);
 }
 
 pub fn door_go_down() callconv(.c) void {
@@ -78,23 +79,23 @@ pub fn door_go_down() callconv(.c) void {
         self.health = self.max_health;
     }
 
-    self.set(q.state, q.STATE_DOWN);
-    subs.SUB_CalcMove(self.get(q.pos1), self.get(q.speed), q.func(door_hit_bottom));
+    self.set(g.state, q.STATE_DOWN);
+    subs.SUB_CalcMove(self.get(g.pos1), self.get(g.speed), q.func(door_hit_bottom));
 }
 
 pub fn door_go_up() callconv(.c) void {
     const self = q.me();
-    if (self.get(q.state) == q.STATE_UP)
+    if (self.get(g.state) == q.STATE_UP)
         return; // allready going up
 
-    if (self.get(q.state) == q.STATE_TOP) { // reset top wait time
-        self.nextthink = self.ltime + self.get(q.wait);
+    if (self.get(g.state) == q.STATE_TOP) { // reset top wait time
+        self.nextthink = self.ltime + self.get(g.wait);
         return;
     }
 
     q.sound(self, q.CHAN_VOICE, self.noise2, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_UP);
-    subs.SUB_CalcMove(self.get(q.pos2), self.get(q.speed), q.func(door_hit_top));
+    self.set(g.state, q.STATE_UP);
+    subs.SUB_CalcMove(self.get(g.pos2), self.get(g.speed), q.func(door_hit_top));
 
     subs.SUB_UseTargets();
 }
@@ -114,13 +115,13 @@ pub fn door_fire() callconv(.c) void {
     // play use key sound
 
     if (self.items != 0)
-        q.sound(self, q.CHAN_VOICE, self.get(q.noise4), 1, q.ATTN_NORM);
+        q.sound(self, q.CHAN_VOICE, self.get(g.noise4), 1, q.ATTN_NORM);
 
-    self.message = q.string_null.get(); // no more message
+    self.message = g.string_null.get(); // no more message
     const oself = self;
 
     if (q.has(self.spawnflags, DOOR_TOGGLE)) {
-        if (self.get(q.state) == q.STATE_UP or self.get(q.state) == q.STATE_TOP) {
+        if (self.get(g.state) == q.STATE_UP or self.get(g.state) == q.STATE_TOP) {
             const starte = self;
             while (true) {
                 door_go_down();
@@ -137,7 +138,7 @@ pub fn door_fire() callconv(.c) void {
     const starte = self;
 
     while (true) {
-        self.goalentity = q.activator.get(); // Who fired us
+        self.goalentity = g.activator.get(); // Who fired us
         door_go_up();
         self = self.enemy;
         q.self.set(self);
@@ -165,11 +166,11 @@ pub fn door_trigger_touch() callconv(.c) void {
     if (other.health <= 0)
         return;
 
-    if (q.time.get() < self.get(q.attack_finished))
+    if (q.time.get() < self.get(g.attack_finished))
         return;
-    self.set(q.attack_finished, q.time.get() + 1);
+    self.set(g.attack_finished, q.time.get() + 1);
 
-    q.activator.set(other);
+    g.activator.set(other);
 
     // (`self` is not restored afterwards in the original.)
     q.self.set(self.owner);
@@ -196,10 +197,10 @@ pub fn door_touch() callconv(.c) void {
 
     if (other.classname.neq(S("player")))
         return;
-    if (owner.get(q.attack_finished) > q.time.get())
+    if (owner.get(g.attack_finished) > q.time.get())
         return;
 
-    owner.set(q.attack_finished, q.time.get() + 2);
+    owner.set(g.attack_finished, q.time.get() + 2);
 
     if (owner.message.neq(S(""))) {
         q.centerprint(other, owner.message);
@@ -212,7 +213,7 @@ pub fn door_touch() callconv(.c) void {
 
     // FIXME: blink key on player's status bar
     if (q.band(self.items, other.items) != self.items) {
-        const worldtype = q.world.get().get(q.worldtype);
+        const worldtype = q.world.get().get(g.worldtype);
         if (owner.items == q.IT_KEY1) {
             if (worldtype == 2) {
                 q.centerprint(other, S("You need the silver keycard"));
@@ -330,7 +331,7 @@ pub fn LinkDoors() callconv(.c) void {
             if (self.items != 0)
                 return;
 
-            self.owner.set(q.trigger_field, spawn_field(cmins, cmaxs));
+            self.owner.set(g.trigger_field, spawn_field(cmins, cmaxs));
 
             return;
         }
@@ -389,23 +390,23 @@ pub fn LinkDoors() callconv(.c) void {
 /// 4)      screechy metal
 pub export fn func_door() void {
     const self = q.me();
-    const worldtype = q.world.get().get(q.worldtype);
+    const worldtype = q.world.get().get(g.worldtype);
 
     if (worldtype == 0) {
         _ = q.precache_sound(S("doors/medtry.wav"));
         _ = q.precache_sound(S("doors/meduse.wav"));
         self.noise3 = S("doors/medtry.wav");
-        self.set(q.noise4, S("doors/meduse.wav"));
+        self.set(g.noise4, S("doors/meduse.wav"));
     } else if (worldtype == 1) {
         _ = q.precache_sound(S("doors/runetry.wav"));
         _ = q.precache_sound(S("doors/runeuse.wav"));
         self.noise3 = S("doors/runetry.wav");
-        self.set(q.noise4, S("doors/runeuse.wav"));
+        self.set(g.noise4, S("doors/runeuse.wav"));
     } else if (worldtype == 2) {
         _ = q.precache_sound(S("doors/basetry.wav"));
         _ = q.precache_sound(S("doors/baseuse.wav"));
         self.noise3 = S("doors/basetry.wav");
-        self.set(q.noise4, S("doors/baseuse.wav"));
+        self.set(g.noise4, S("doors/baseuse.wav"));
     } else {
         q.dprint(S("no worldtype set!\n"));
     }
@@ -457,36 +458,36 @@ pub export fn func_door() void {
     if (q.has(self.spawnflags, DOOR_GOLD_KEY))
         self.items = q.IT_KEY2;
 
-    if (self.get(q.speed) == 0)
-        self.set(q.speed, 100);
-    if (self.get(q.wait) == 0)
-        self.set(q.wait, 3);
-    if (self.get(q.lip) == 0)
-        self.set(q.lip, 8);
-    if (self.get(q.dmg) == 0)
-        self.set(q.dmg, 2);
+    if (self.get(g.speed) == 0)
+        self.set(g.speed, 100);
+    if (self.get(g.wait) == 0)
+        self.set(g.wait, 3);
+    if (self.get(g.lip) == 0)
+        self.set(g.lip, 8);
+    if (self.get(g.dmg) == 0)
+        self.set(g.dmg, 2);
 
-    self.set(q.pos1, self.origin);
+    self.set(g.pos1, self.origin);
     const movedir = self.movedir;
-    self.set(q.pos2, self.get(q.pos1) + q.scale(movedir, q.fabs(q.dot(movedir, self.size)) - self.get(q.lip)));
+    self.set(g.pos2, self.get(g.pos1) + q.scale(movedir, q.fabs(q.dot(movedir, self.size)) - self.get(g.lip)));
 
     // DOOR_START_OPEN is to allow an entity to be lighted in the closed position
     // but spawn in the open position
     if (q.has(self.spawnflags, DOOR_START_OPEN)) {
-        q.setorigin(self, self.get(q.pos2));
-        self.set(q.pos2, self.get(q.pos1));
-        self.set(q.pos1, self.origin);
+        q.setorigin(self, self.get(g.pos2));
+        self.set(g.pos2, self.get(g.pos1));
+        self.set(g.pos1, self.origin);
     }
 
-    self.set(q.state, q.STATE_BOTTOM);
+    self.set(g.state, q.STATE_BOTTOM);
 
     if (self.health != 0) {
         self.takedamage = q.DAMAGE_YES;
-        self.set(q.th_die, q.func(door_killed));
+        self.set(g.th_die, q.func(door_killed));
     }
 
     if (self.items != 0)
-        self.set(q.wait, -1);
+        self.set(g.wait, -1);
 
     self.touch = q.func(door_touch);
 
@@ -517,12 +518,12 @@ pub fn fd_secret_use() callconv(.c) void {
     if (q.vecNeq(self.origin, self.oldorigin))
         return;
 
-    self.message = q.string_null.get(); // no more message
+    self.message = g.string_null.get(); // no more message
 
     subs.SUB_UseTargets(); // fire all targets / killtargets
 
     if (!q.has(self.spawnflags, SECRET_NO_SHOOT)) {
-        self.set(q.th_pain, q.func(subs.SUB_Null));
+        self.set(g.th_pain, q.func(subs.SUB_Null));
         self.takedamage = q.DAMAGE_NO;
     }
     self.velocity = q.vec(0, 0, 0);
@@ -533,27 +534,27 @@ pub fn fd_secret_use() callconv(.c) void {
     self.nextthink = self.ltime + 0.1;
 
     const temp = 1 - q.band(self.spawnflags, SECRET_1ST_LEFT); // 1 or -1
-    q.makevectors(self.get(q.mangle));
+    q.makevectors(self.get(g.mangle));
 
-    if (self.get(q.t_width) == 0) {
+    if (self.get(g.t_width) == 0) {
         if (q.has(self.spawnflags, SECRET_1ST_DOWN)) {
-            self.set(q.t_width, q.fabs(q.dot(q.v_up.get(), self.size)));
+            self.set(g.t_width, q.fabs(q.dot(q.v_up.get(), self.size)));
         } else {
-            self.set(q.t_width, q.fabs(q.dot(q.v_right.get(), self.size)));
+            self.set(g.t_width, q.fabs(q.dot(q.v_right.get(), self.size)));
         }
     }
 
-    if (self.get(q.t_length) == 0)
-        self.set(q.t_length, q.fabs(q.dot(q.v_forward.get(), self.size)));
+    if (self.get(g.t_length) == 0)
+        self.set(g.t_length, q.fabs(q.dot(q.v_forward.get(), self.size)));
 
     if (q.has(self.spawnflags, SECRET_1ST_DOWN)) {
-        self.set(q.dest1, self.origin - q.scale(q.v_up.get(), self.get(q.t_width)));
+        self.set(g.dest1, self.origin - q.scale(q.v_up.get(), self.get(g.t_width)));
     } else {
-        self.set(q.dest1, self.origin + q.scale(q.v_right.get(), self.get(q.t_width) * temp));
+        self.set(g.dest1, self.origin + q.scale(q.v_right.get(), self.get(g.t_width) * temp));
     }
 
-    self.set(q.dest2, self.get(q.dest1) + q.scale(q.v_forward.get(), self.get(q.t_length)));
-    subs.SUB_CalcMove(self.get(q.dest1), self.get(q.speed), q.func(fd_secret_move1));
+    self.set(g.dest2, self.get(g.dest1) + q.scale(q.v_forward.get(), self.get(g.t_length)));
+    subs.SUB_CalcMove(self.get(g.dest1), self.get(g.speed), q.func(fd_secret_move1));
     q.sound(self, q.CHAN_VOICE, self.noise2, 1, q.ATTN_NORM);
 }
 
@@ -569,7 +570,7 @@ pub fn fd_secret_move1() callconv(.c) void {
 pub fn fd_secret_move2() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.noise2, 1, q.ATTN_NORM);
-    subs.SUB_CalcMove(self.get(q.dest2), self.get(q.speed), q.func(fd_secret_move3));
+    subs.SUB_CalcMove(self.get(g.dest2), self.get(g.speed), q.func(fd_secret_move3));
 }
 
 /// Wait here until time to go back...
@@ -577,7 +578,7 @@ pub fn fd_secret_move3() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.noise3, 1, q.ATTN_NORM);
     if (!q.has(self.spawnflags, SECRET_OPEN_ONCE)) {
-        self.nextthink = self.ltime + self.get(q.wait);
+        self.nextthink = self.ltime + self.get(g.wait);
         self.think = q.func(fd_secret_move4);
     }
 }
@@ -586,7 +587,7 @@ pub fn fd_secret_move3() callconv(.c) void {
 pub fn fd_secret_move4() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.noise2, 1, q.ATTN_NORM);
-    subs.SUB_CalcMove(self.get(q.dest1), self.get(q.speed), q.func(fd_secret_move5));
+    subs.SUB_CalcMove(self.get(g.dest1), self.get(g.speed), q.func(fd_secret_move5));
 }
 
 /// Wait 1 second...
@@ -600,7 +601,7 @@ pub fn fd_secret_move5() callconv(.c) void {
 pub fn fd_secret_move6() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.noise2, 1, q.ATTN_NORM);
-    subs.SUB_CalcMove(self.oldorigin, self.get(q.speed), q.func(fd_secret_done));
+    subs.SUB_CalcMove(self.oldorigin, self.get(g.speed), q.func(fd_secret_done));
 }
 
 pub fn fd_secret_done() callconv(.c) void {
@@ -608,20 +609,20 @@ pub fn fd_secret_done() callconv(.c) void {
     if (self.targetname.isNull() or q.has(self.spawnflags, SECRET_YES_SHOOT)) {
         self.health = 10000;
         self.takedamage = q.DAMAGE_YES;
-        self.set(q.th_pain, q.func(fd_secret_use));
-        self.set(q.th_die, q.func(fd_secret_use));
+        self.set(g.th_pain, q.func(fd_secret_use));
+        self.set(g.th_die, q.func(fd_secret_use));
     }
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise3, 1, q.ATTN_NORM);
 }
 
 pub fn secret_blocked() callconv(.c) void {
     const self = q.me();
-    if (q.time.get() < self.get(q.attack_finished))
+    if (q.time.get() < self.get(g.attack_finished))
         return;
-    self.set(q.attack_finished, q.time.get() + 0.5);
+    self.set(g.attack_finished, q.time.get() + 0.5);
     const other = q.other.get();
-    other.set(q.deathtype, S("squish"));
-    combat.T_Damage(other, self, self, self.get(q.dmg));
+    other.set(g.deathtype, S("squish"));
+    combat.T_Damage(other, self, self, self.get(g.dmg));
 }
 
 /// secret_touch
@@ -632,10 +633,10 @@ pub fn secret_touch() callconv(.c) void {
     const other = q.other.get();
     if (other.classname.neq(S("player")))
         return;
-    if (self.get(q.attack_finished) > q.time.get())
+    if (self.get(g.attack_finished) > q.time.get())
         return;
 
-    self.set(q.attack_finished, q.time.get() + 2);
+    self.set(g.attack_finished, q.time.get() + 2);
 
     if (!self.message.isNull()) {
         q.centerprint(other, self.message);
@@ -686,11 +687,11 @@ pub export fn func_door_secret() void {
         self.noise3 = S("doors/basesec2.wav");
     }
 
-    if (self.get(q.dmg) == 0)
-        self.set(q.dmg, 2);
+    if (self.get(g.dmg) == 0)
+        self.set(g.dmg, 2);
 
     // Magic formula...
-    self.set(q.mangle, self.angles);
+    self.set(g.mangle, self.angles);
     self.angles = q.vec(0, 0, 0);
     self.solid = q.SOLID_BSP;
     self.movetype = q.MOVETYPE_PUSH;
@@ -700,14 +701,14 @@ pub export fn func_door_secret() void {
 
     self.touch = q.func(secret_touch);
     self.blocked = q.func(secret_blocked);
-    self.set(q.speed, 50);
+    self.set(g.speed, 50);
     self.use = q.func(fd_secret_use);
     if (self.targetname.isNull() or q.has(self.spawnflags, SECRET_YES_SHOOT)) {
         self.health = 10000;
         self.takedamage = q.DAMAGE_YES;
-        self.set(q.th_pain, q.func(fd_secret_use));
+        self.set(g.th_pain, q.func(fd_secret_use));
     }
     self.oldorigin = self.origin;
-    if (self.get(q.wait) == 0)
-        self.set(q.wait, 5); // 5 seconds before closing
+    if (self.get(g.wait) == 0)
+        self.set(g.wait, 5); // 5 seconds before closing
 }

@@ -8,6 +8,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 
 const combat = @import("combat.zig");
@@ -32,7 +33,7 @@ pub fn plat_spawn_inside_trigger() callconv(.c) void {
     const size = self.size;
     var tmin = mins + q.vec(25, 25, 0);
     var tmax = maxs - q.vec(25, 25, -8);
-    tmin[2] = tmax[2] - (self.get(q.pos1)[2] - self.get(q.pos2)[2] + 8);
+    tmin[2] = tmax[2] - (self.get(g.pos1)[2] - self.get(g.pos2)[2] + 8);
     if (q.has(self.spawnflags, PLAT_LOW_TRIGGER))
         tmax[2] = tmin[2] + 8;
 
@@ -51,7 +52,7 @@ pub fn plat_spawn_inside_trigger() callconv(.c) void {
 pub fn plat_hit_top() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_TOP);
+    self.set(g.state, q.STATE_TOP);
     self.think = q.func(plat_go_down);
     self.nextthink = self.ltime + 3;
 }
@@ -59,21 +60,21 @@ pub fn plat_hit_top() callconv(.c) void {
 pub fn plat_hit_bottom() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_BOTTOM);
+    self.set(g.state, q.STATE_BOTTOM);
 }
 
 pub fn plat_go_down() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_DOWN);
-    subs.SUB_CalcMove(self.get(q.pos2), self.get(q.speed), q.func(plat_hit_bottom));
+    self.set(g.state, q.STATE_DOWN);
+    subs.SUB_CalcMove(self.get(g.pos2), self.get(g.speed), q.func(plat_hit_bottom));
 }
 
 pub fn plat_go_up() callconv(.c) void {
     const self = q.me();
     q.sound(self, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
-    self.set(q.state, q.STATE_UP);
-    subs.SUB_CalcMove(self.get(q.pos1), self.get(q.speed), q.func(plat_hit_top));
+    self.set(g.state, q.STATE_UP);
+    subs.SUB_CalcMove(self.get(g.pos1), self.get(g.speed), q.func(plat_hit_top));
 }
 
 pub fn plat_center_touch() callconv(.c) void {
@@ -87,9 +88,9 @@ pub fn plat_center_touch() callconv(.c) void {
     // (`self` is not restored afterwards in the original.)
     const self = q.me().enemy;
     q.self.set(self);
-    if (self.get(q.state) == q.STATE_BOTTOM) {
+    if (self.get(g.state) == q.STATE_BOTTOM) {
         plat_go_up();
-    } else if (self.get(q.state) == q.STATE_TOP) {
+    } else if (self.get(g.state) == q.STATE_TOP) {
         self.nextthink = self.ltime + 1; // delay going down
     }
 }
@@ -105,7 +106,7 @@ pub fn plat_outside_touch() callconv(.c) void {
     //dprint ("plat_outside_touch\n");
     const self = q.me().enemy;
     q.self.set(self);
-    if (self.get(q.state) == q.STATE_TOP)
+    if (self.get(g.state) == q.STATE_TOP)
         plat_go_down();
 }
 
@@ -120,12 +121,12 @@ pub fn plat_crush() callconv(.c) void {
     const other = q.other.get();
     //dprint ("plat_crush\n");
 
-    other.set(q.deathtype, S("squish"));
+    other.set(g.deathtype, S("squish"));
     combat.T_Damage(other, self, self, 1);
 
-    if (self.get(q.state) == q.STATE_UP) {
+    if (self.get(g.state) == q.STATE_UP) {
         plat_go_down();
-    } else if (self.get(q.state) == q.STATE_DOWN) {
+    } else if (self.get(g.state) == q.STATE_DOWN) {
         plat_go_up();
     } else {
         q.objerror(S("plat_crush: bad self.state\n"));
@@ -135,7 +136,7 @@ pub fn plat_crush() callconv(.c) void {
 pub fn plat_use() callconv(.c) void {
     const self = q.me();
     self.use = q.func(subs.SUB_Null);
-    if (self.get(q.state) != q.STATE_UP)
+    if (self.get(g.state) != q.STATE_UP)
         q.objerror(S("plat_use: not in up state"));
     plat_go_down();
 }
@@ -157,10 +158,10 @@ pub fn plat_use() callconv(.c) void {
 pub export fn func_plat() void {
     const self = q.me();
 
-    if (self.get(q.t_length) == 0)
-        self.set(q.t_length, 80);
-    if (self.get(q.t_width) == 0)
-        self.set(q.t_width, 10);
+    if (self.get(g.t_length) == 0)
+        self.set(g.t_length, 80);
+    if (self.get(g.t_width) == 0)
+        self.set(g.t_width, 10);
 
     if (self.sounds == 0)
         self.sounds = 2;
@@ -180,7 +181,7 @@ pub export fn func_plat() void {
         self.noise1 = S("plats/medplat2.wav");
     }
 
-    self.set(q.mangle, self.angles);
+    self.set(g.mangle, self.angles);
     self.angles = q.vec(0, 0, 0);
 
     self.classname = S("plat");
@@ -191,29 +192,29 @@ pub export fn func_plat() void {
     q.setsize(self, self.mins, self.maxs);
 
     self.blocked = q.func(plat_crush);
-    if (self.get(q.speed) == 0)
-        self.set(q.speed, 150);
+    if (self.get(g.speed) == 0)
+        self.set(g.speed, 150);
 
     // pos1 is the top position, pos2 is the bottom
-    self.set(q.pos1, self.origin);
+    self.set(g.pos1, self.origin);
     var pos2 = self.origin;
-    if (self.get(q.height) != 0) {
-        pos2[2] = self.origin[2] - self.get(q.height);
+    if (self.get(g.height) != 0) {
+        pos2[2] = self.origin[2] - self.get(g.height);
     } else {
         pos2[2] = self.origin[2] - self.size[2] + 8;
     }
-    self.set(q.pos2, pos2);
+    self.set(g.pos2, pos2);
 
     self.use = q.func(plat_trigger_use);
 
     plat_spawn_inside_trigger(); // the "start moving" trigger
 
     if (!self.targetname.isNull()) {
-        self.set(q.state, q.STATE_UP);
+        self.set(g.state, q.STATE_UP);
         self.use = q.func(plat_use);
     } else {
-        q.setorigin(self, self.get(q.pos2));
-        self.set(q.state, q.STATE_BOTTOM);
+        q.setorigin(self, self.get(g.pos2));
+        self.set(g.state, q.STATE_BOTTOM);
     }
 }
 
@@ -221,12 +222,12 @@ pub export fn func_plat() void {
 
 pub fn train_blocked() callconv(.c) void {
     const self = q.me();
-    if (q.time.get() < self.get(q.attack_finished))
+    if (q.time.get() < self.get(g.attack_finished))
         return;
-    self.set(q.attack_finished, q.time.get() + 0.5);
+    self.set(g.attack_finished, q.time.get() + 0.5);
     const other = q.other.get();
-    other.set(q.deathtype, S("squish"));
-    combat.T_Damage(other, self, self, self.get(q.dmg));
+    other.set(g.deathtype, S("squish"));
+    combat.T_Damage(other, self, self, self.get(g.dmg));
 }
 
 pub fn train_use() callconv(.c) void {
@@ -237,8 +238,8 @@ pub fn train_use() callconv(.c) void {
 
 pub fn train_wait() callconv(.c) void {
     const self = q.me();
-    if (self.get(q.wait) != 0) {
-        self.nextthink = self.ltime + self.get(q.wait);
+    if (self.get(g.wait) != 0) {
+        self.nextthink = self.ltime + self.get(g.wait);
         q.sound(self, q.CHAN_NO_PHS_ADD + q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     } else {
         self.nextthink = self.ltime + 0.1;
@@ -254,13 +255,13 @@ pub fn train_next() callconv(.c) void {
     self.target = targ.target;
     if (self.target.isNull())
         q.objerror(S("train_next: no next target"));
-    if (targ.get(q.wait) != 0) {
-        self.set(q.wait, targ.get(q.wait));
+    if (targ.get(g.wait) != 0) {
+        self.set(g.wait, targ.get(g.wait));
     } else {
-        self.set(q.wait, 0);
+        self.set(g.wait, 0);
     }
     q.sound(self, q.CHAN_VOICE, self.noise1, 1, q.ATTN_NORM);
-    subs.SUB_CalcMove(@as(q.Vector, targ.origin) - self.mins, self.get(q.speed), q.func(train_wait));
+    subs.SUB_CalcMove(@as(q.Vector, targ.origin) - self.mins, self.get(g.speed), q.func(train_wait));
 }
 
 pub fn func_train_find() callconv(.c) void {
@@ -287,12 +288,12 @@ pub fn func_train_find() callconv(.c) void {
 /// 1) ratchet metal
 pub export fn func_train() void {
     const self = q.me();
-    if (self.get(q.speed) == 0)
-        self.set(q.speed, 100);
+    if (self.get(g.speed) == 0)
+        self.set(g.speed, 100);
     if (self.target.isNull())
         q.objerror(S("func_train without a target"));
-    if (self.get(q.dmg) == 0)
-        self.set(q.dmg, 2);
+    if (self.get(g.dmg) == 0)
+        self.set(g.dmg, 2);
 
     if (self.sounds == 0) {
         self.noise = S("misc/null.wav");
@@ -308,7 +309,7 @@ pub export fn func_train() void {
         _ = q.precache_sound(S("plats/train1.wav"));
     }
 
-    self.set(q.cnt, 1);
+    self.set(g.cnt, 1);
     self.solid = q.SOLID_BSP;
     self.movetype = q.MOVETYPE_PUSH;
     self.blocked = q.func(train_blocked);
@@ -329,12 +330,12 @@ pub export fn func_train() void {
 /// This is used for the final bos
 pub export fn misc_teleporttrain() void {
     const self = q.me();
-    if (self.get(q.speed) == 0)
-        self.set(q.speed, 100);
+    if (self.get(g.speed) == 0)
+        self.set(g.speed, 100);
     if (self.target.isNull())
         q.objerror(S("func_train without a target"));
 
-    self.set(q.cnt, 1);
+    self.set(g.cnt, 1);
     self.solid = q.SOLID_NOT;
     self.movetype = q.MOVETYPE_PUSH;
     self.blocked = q.func(train_blocked);

@@ -10,6 +10,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Vector = q.Vector;
 
@@ -34,10 +35,10 @@ pub const START_OFF: f32 = 1;
 pub fn light_use() callconv(.c) void {
     const self = q.me();
     if (q.has(self.spawnflags, START_OFF)) {
-        q.lightstyle(self.get(q.style), S("m"));
+        q.lightstyle(self.get(g.style), S("m"));
         self.spawnflags = self.spawnflags - START_OFF;
     } else {
-        q.lightstyle(self.get(q.style), S("a"));
+        q.lightstyle(self.get(g.style), S("a"));
         self.spawnflags = self.spawnflags + START_OFF;
     }
 }
@@ -54,12 +55,12 @@ pub export fn light() void {
         return;
     }
 
-    if (self.get(q.style) >= 32) {
+    if (self.get(g.style) >= 32) {
         self.use = q.func(light_use);
         if (q.has(self.spawnflags, START_OFF)) {
-            q.lightstyle(self.get(q.style), S("a"));
+            q.lightstyle(self.get(g.style), S("a"));
         } else {
-            q.lightstyle(self.get(q.style), S("m"));
+            q.lightstyle(self.get(g.style), S("m"));
         }
     }
 }
@@ -72,12 +73,12 @@ pub export fn light() void {
 /// Makes steady fluorescent humming sound
 pub export fn light_fluoro() void {
     const self = q.me();
-    if (self.get(q.style) >= 32) {
+    if (self.get(g.style) >= 32) {
         self.use = q.func(light_use);
         if (q.has(self.spawnflags, START_OFF)) {
-            q.lightstyle(self.get(q.style), S("a"));
+            q.lightstyle(self.get(g.style), S("a"));
         } else {
-            q.lightstyle(self.get(q.style), S("m"));
+            q.lightstyle(self.get(g.style), S("m"));
         }
     }
 
@@ -92,8 +93,8 @@ pub export fn light_fluoro() void {
 /// Makes sparking, broken fluorescent sound
 pub export fn light_fluorospark() void {
     const self = q.me();
-    if (self.get(q.style) == 0)
-        self.set(q.style, 10);
+    if (self.get(g.style) == 0)
+        self.set(g.style, 10);
 
     _ = q.precache_sound(S("ambience/buzz1.wav"));
     q.ambientsound(self.origin, S("ambience/buzz1.wav"), 0.5, q.ATTN_STATIC);
@@ -172,8 +173,8 @@ pub export fn misc_fireball() void {
     self.think = q.func(fire_fly);
     // (`self.speed == 1000;` in the original: a comparison, so `speed` stays
     // 0.)
-    if (self.get(q.speed) == 0)
-        _ = self.get(q.speed) == 1000;
+    if (self.get(g.speed) == 0)
+        _ = self.get(g.speed) == 1000;
 }
 
 pub fn fire_fly() callconv(.c) void {
@@ -185,7 +186,7 @@ pub fn fire_fly() callconv(.c) void {
     fireball.velocity = q.vec(
         (q.random() * 100) - 50,
         (q.random() * 100) - 50,
-        self.get(q.speed) + (q.random() * 200),
+        self.get(g.speed) + (q.random() * 200),
     );
     fireball.classname = S("fireball");
     q.setmodel(fireball, S("progs/lavaball.mdl"));
@@ -234,7 +235,7 @@ inline fn explobox(model: q.String, maxs: Vector) void {
     q.setsize(self, q.vec(0, 0, 0), maxs);
     _ = q.precache_sound(S("weapons/r_exp3.wav"));
     self.health = 20;
-    self.set(q.th_die, q.func(barrel_explode));
+    self.set(g.th_die, q.func(barrel_explode));
     self.takedamage = q.DAMAGE_AIM;
 
     var origin = self.origin;
@@ -286,7 +287,7 @@ pub fn Laser_Touch() callconv(.c) void {
 
     if (other.health != 0) {
         weapons.SpawnBlood(org, 15);
-        other.set(q.deathtype, S("laser"));
+        other.set(g.deathtype, S("laser"));
         combat.T_Damage(other, self, self.owner, 15);
     } else {
         q.WriteByte(q.MSG_MULTICAST, q.SVC_TEMPENTITY);
@@ -348,7 +349,7 @@ pub fn spikeshooter_use() callconv(.c) void {
 pub fn shooter_think() callconv(.c) void {
     const self = q.me();
     spikeshooter_use();
-    self.nextthink = q.time.get() + self.get(q.wait);
+    self.nextthink = q.time.get() + self.get(g.wait);
     q.newmis.get().velocity = q.scale(self.movedir, 500);
 }
 
@@ -377,9 +378,9 @@ pub export fn trap_shooter() void {
     const self = q.me();
     trap_spikeshooter();
 
-    if (self.get(q.wait) == 0)
-        self.set(q.wait, 1);
-    self.nextthink = self.nextthink + self.get(q.wait) + self.ltime;
+    if (self.get(g.wait) == 0)
+        self.set(g.wait, 1);
+    self.nextthink = self.nextthink + self.get(g.wait) + self.ltime;
     self.think = q.func(shooter_think);
 }
 
@@ -409,7 +410,7 @@ pub fn make_bubbles() callconv(.c) void {
     bubble.touch = q.func(bubble_remove);
     bubble.classname = S("bubble");
     bubble.frame = 0;
-    bubble.set(q.cnt, 0);
+    bubble.set(g.cnt, 0);
     q.setsize(bubble, q.vec(-8, -8, -8), q.vec(8, 8, 8));
     self.nextthink = q.time.get() + q.random() + 0.5;
     self.think = q.func(make_bubbles);
@@ -429,10 +430,10 @@ pub fn bubble_split() callconv(.c) void {
     bubble.touch = q.func(bubble_remove);
     bubble.classname = S("bubble");
     bubble.frame = 1;
-    bubble.set(q.cnt, 10);
+    bubble.set(g.cnt, 10);
     q.setsize(bubble, q.vec(-8, -8, -8), q.vec(8, 8, 8));
     self.frame = 1;
-    self.set(q.cnt, 10);
+    self.set(g.cnt, 10);
     if (self.waterlevel != 3)
         q.remove(self);
 }
@@ -449,10 +450,10 @@ pub fn bubble_remove() callconv(.c) void {
 pub fn bubble_bob() callconv(.c) void {
     const self = q.me();
 
-    self.set(q.cnt, self.get(q.cnt) + 1);
-    if (self.get(q.cnt) == 4)
+    self.set(g.cnt, self.get(g.cnt) + 1);
+    if (self.get(g.cnt) == 4)
         bubble_split();
-    if (self.get(q.cnt) == 20)
+    if (self.get(g.cnt) == 20)
         q.remove(self);
 
     const vel = self.velocity;

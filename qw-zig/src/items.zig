@@ -8,6 +8,7 @@
 //! any later version. See gnu.txt.
 
 const q = @import("defs.zig");
+const g = @import("game.zig");
 const S = q.S;
 const Entity = q.Entity;
 
@@ -19,7 +20,7 @@ const weapons = @import("weapons.zig");
 
 pub fn SUB_regen() callconv(.c) void {
     const self = q.me();
-    self.model = self.get(q.mdl); // restore original model
+    self.model = self.get(g.mdl); // restore original model
     self.solid = q.SOLID_TRIGGER; // allow it to be touched again
     q.sound(self, q.CHAN_VOICE, S("items/itembk2.wav"), 1, q.ATTN_NORM); // play respawn sound
     q.setorigin(self, self.origin);
@@ -44,27 +45,27 @@ pub fn q_touch() callconv(.c) void {
     if (other.health <= 0)
         return;
 
-    self.set(q.mdl, self.model);
+    self.set(g.mdl, self.model);
 
     q.sound(other, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     q.stuffcmd(other, S("bf\n"));
     self.solid = q.SOLID_NOT;
     other.items = q.bor(other.items, q.IT_QUAD);
-    self.model = q.string_null.get();
-    if (q.deathmatch.get() == 4) {
+    self.model = g.string_null.get();
+    if (g.deathmatch.get() == 4) {
         other.armortype = 0;
         other.armorvalue = 0 * 0.01;
         other.ammo_cells = 0;
     }
 
     // do the apropriate action
-    other.set(q.super_time, 1);
-    other.set(q.super_damage_finished, self.get(q.cnt));
+    other.set(g.super_time, 1);
+    other.set(g.super_damage_finished, self.get(g.cnt));
 
-    const s = q.ftos(q.rint(other.get(q.super_damage_finished) - q.time.get()));
+    const s = q.ftos(q.rint(other.get(g.super_damage_finished) - q.time.get()));
 
     q.bprint(q.PRINT_LOW, other.netname);
-    if (q.deathmatch.get() == 4) {
+    if (g.deathmatch.get() == 4) {
         q.bprint(q.PRINT_LOW, S(" recovered an OctaPower with "));
     } else {
         q.bprint(q.PRINT_LOW, S(" recovered a Quad with "));
@@ -72,7 +73,7 @@ pub fn q_touch() callconv(.c) void {
     q.bprint(q.PRINT_LOW, s);
     q.bprint(q.PRINT_LOW, S(" seconds remaining!\n"));
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -93,7 +94,7 @@ pub fn DropQuad(timeleft: f32) callconv(.c) void {
     item.noise = S("items/damage.wav");
     q.setmodel(item, S("progs/quaddama.mdl"));
     q.setsize(item, q.vec(-16, -16, -24), q.vec(16, 16, 32));
-    item.set(q.cnt, q.time.get() + timeleft);
+    item.set(g.cnt, q.time.get() + timeleft);
     item.touch = q.func(q_touch);
     item.nextthink = q.time.get() + timeleft; // remove it with the time left on it
     item.think = q.func(subs.SUB_Remove);
@@ -108,24 +109,24 @@ pub fn r_touch() callconv(.c) void {
     if (other.health <= 0)
         return;
 
-    self.set(q.mdl, self.model);
+    self.set(g.mdl, self.model);
 
     q.sound(other, q.CHAN_VOICE, self.noise, 1, q.ATTN_NORM);
     q.stuffcmd(other, S("bf\n"));
     self.solid = q.SOLID_NOT;
     other.items = q.bor(other.items, q.IT_INVISIBILITY);
-    self.model = q.string_null.get();
+    self.model = g.string_null.get();
 
     // do the apropriate action
-    other.set(q.invisible_time, 1);
-    other.set(q.invisible_finished, self.get(q.cnt));
-    const s = q.ftos(q.rint(other.get(q.invisible_finished) - q.time.get()));
+    other.set(g.invisible_time, 1);
+    other.set(g.invisible_finished, self.get(g.cnt));
+    const s = q.ftos(q.rint(other.get(g.invisible_finished) - q.time.get()));
     q.bprint(q.PRINT_LOW, other.netname);
     q.bprint(q.PRINT_LOW, S(" recovered a Ring with "));
     q.bprint(q.PRINT_LOW, s);
     q.bprint(q.PRINT_LOW, S(" seconds remaining!\n"));
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -145,7 +146,7 @@ pub fn DropRing(timeleft: f32) callconv(.c) void {
     item.noise = S("items/inv1.wav");
     q.setmodel(item, S("progs/invisibl.mdl"));
     q.setsize(item, q.vec(-16, -16, -24), q.vec(16, 16, 32));
-    item.set(q.cnt, q.time.get() + timeleft);
+    item.set(g.cnt, q.time.get() + timeleft);
     item.touch = q.func(r_touch);
     item.nextthink = q.time.get() + timeleft; // remove after 30 seconds
     item.think = q.func(subs.SUB_Remove);
@@ -157,7 +158,7 @@ pub fn DropRing(timeleft: f32) callconv(.c) void {
 pub fn PlaceItem() callconv(.c) void {
     const self = q.me();
 
-    self.set(q.mdl, self.model); // so it can be restored on respawn
+    self.set(g.mdl, self.model); // so it can be restored on respawn
     self.flags = q.FL_ITEM; // make extra wide
     self.solid = q.SOLID_TRIGGER;
     self.movetype = q.MOVETYPE_TOSS;
@@ -256,8 +257,8 @@ pub fn health_touch() callconv(.c) void {
     const self = q.me();
     const other = q.other.get();
 
-    if (q.deathmatch.get() == 4)
-        if (other.get(q.invincible_time) > 0)
+    if (g.deathmatch.get() == 4)
+        if (other.get(g.invincible_time) > 0)
             return;
 
     if (other.classname.neq(S("player")))
@@ -283,25 +284,25 @@ pub fn health_touch() callconv(.c) void {
 
     q.stuffcmd(other, S("bf\n"));
 
-    self.model = q.string_null.get();
+    self.model = g.string_null.get();
     self.solid = q.SOLID_NOT;
 
     // Megahealth = rot down the player's super health
     if (self.get(healtype) == 2) {
         other.items = q.bor(other.items, q.IT_SUPERHEALTH);
-        if (q.deathmatch.get() != 4) {
+        if (g.deathmatch.get() != 4) {
             self.nextthink = q.time.get() + 5;
             self.think = q.func(item_megahealth_rot);
         }
         self.owner = other;
     } else {
-        if (q.deathmatch.get() != 2) { // deathmatch 2 is the silly old rules
+        if (g.deathmatch.get() != 2) { // deathmatch 2 is the silly old rules
             self.nextthink = q.time.get() + 20;
             self.think = q.func(SUB_regen);
         }
     }
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -320,7 +321,7 @@ pub fn item_megahealth_rot() callconv(.c) void {
     // just blindly subtract the flag off
     other.items = other.items - q.band(other.items, q.IT_SUPERHEALTH);
 
-    if (q.deathmatch.get() != 2) { // deathmatch 2 is silly old rules
+    if (g.deathmatch.get() != 2) { // deathmatch 2 is silly old rules
         self.nextthink = q.time.get() + 20;
         self.think = q.func(SUB_regen);
     }
@@ -344,8 +345,8 @@ pub fn armor_touch() callconv(.c) void {
     if (other.classname.neq(S("player")))
         return;
 
-    if (q.deathmatch.get() == 4)
-        if (other.get(q.invincible_time) > 0)
+    if (g.deathmatch.get() == 4)
+        if (other.get(g.invincible_time) > 0)
             return;
 
     if (self.classname.eql(S("item_armor1"))) {
@@ -371,8 +372,8 @@ pub fn armor_touch() callconv(.c) void {
     other.items = other.items - q.band(other.items, q.bor(q.bor(q.IT_ARMOR1, q.IT_ARMOR2), q.IT_ARMOR3)) + bit;
 
     self.solid = q.SOLID_NOT;
-    self.model = q.string_null.get();
-    if (q.deathmatch.get() != 2)
+    self.model = g.string_null.get();
+    if (g.deathmatch.get() != 2)
         self.nextthink = q.time.get() + 20;
     self.think = q.func(SUB_regen);
 
@@ -381,7 +382,7 @@ pub fn armor_touch() callconv(.c) void {
     q.sound(other, q.CHAN_ITEM, S("items/armor1.wav"), 1, q.ATTN_NORM);
     q.stuffcmd(other, S("bf\n"));
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -499,7 +500,7 @@ pub fn weapon_touch() callconv(.c) void {
     _ = weapons.W_BestWeapon(); // (`best` is unused in the original)
     q.self.set(stemp);
 
-    const leave = q.deathmatch.get() == 2 or q.deathmatch.get() == 3 or q.deathmatch.get() == 5;
+    const leave = g.deathmatch.get() == 2 or g.deathmatch.get() == 3 or g.deathmatch.get() == 5;
 
     // (`hadammo` is set in each case but never used in the original.)
     if (self.classname.eql(S("weapon_nailgun"))) {
@@ -570,20 +571,20 @@ pub fn weapon_touch() callconv(.c) void {
         return;
 
     // (Always true in the original.)
-    if (q.deathmatch.get() != 3 or q.deathmatch.get() != 5) {
+    if (g.deathmatch.get() != 3 or g.deathmatch.get() != 5) {
         // remove it in single player, or setup for respawning in deathmatch
-        self.model = q.string_null.get();
+        self.model = g.string_null.get();
         self.solid = q.SOLID_NOT;
-        if (q.deathmatch.get() != 2)
+        if (g.deathmatch.get() != 2)
             self.nextthink = q.time.get() + 30;
         self.think = q.func(SUB_regen);
     }
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
 fn weaponItem(model: q.String, weapon: f32, netname: q.String) void {
-    if (q.deathmatch.get() <= 3) {
+    if (g.deathmatch.get() <= 3) {
         const self = q.me();
         _ = q.precache_model(model);
         q.setmodel(self, model);
@@ -650,28 +651,28 @@ pub fn ammo_touch() callconv(.c) void {
     if (self.weapon == 1) {
         if (other.ammo_shells >= 100)
             return;
-        other.ammo_shells = other.ammo_shells + self.get(q.aflag);
+        other.ammo_shells = other.ammo_shells + self.get(g.aflag);
     }
 
     // spikes
     if (self.weapon == 2) {
         if (other.ammo_nails >= 200)
             return;
-        other.ammo_nails = other.ammo_nails + self.get(q.aflag);
+        other.ammo_nails = other.ammo_nails + self.get(g.aflag);
     }
 
     //      rockets
     if (self.weapon == 3) {
         if (other.ammo_rockets >= 100)
             return;
-        other.ammo_rockets = other.ammo_rockets + self.get(q.aflag);
+        other.ammo_rockets = other.ammo_rockets + self.get(g.aflag);
     }
 
     //      cells
     if (self.weapon == 4) {
         if (other.ammo_cells >= 100)
             return;
-        other.ammo_cells = other.ammo_cells + self.get(q.aflag);
+        other.ammo_cells = other.ammo_cells + self.get(g.aflag);
     }
 
     bound_other_ammo();
@@ -700,19 +701,19 @@ pub fn ammo_touch() callconv(.c) void {
     q.self.set(stemp);
 
     // remove it in single player, or setup for respawning in deathmatch
-    self.model = q.string_null.get();
+    self.model = g.string_null.get();
     self.solid = q.SOLID_NOT;
-    if (q.deathmatch.get() != 2)
+    if (g.deathmatch.get() != 2)
         self.nextthink = q.time.get() + 30;
 
     // Xian -- If playing in DM 3.0 mode, halve the time ammo respawns
 
-    if (q.deathmatch.get() == 3 or q.deathmatch.get() == 5)
+    if (g.deathmatch.get() == 3 or g.deathmatch.get() == 5)
         self.nextthink = q.time.get() + 15;
 
     self.think = q.func(SUB_regen);
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -720,7 +721,7 @@ pub const WEAPON_BIG2: f32 = 1;
 
 fn ammoItem(big: bool, big_model: q.String, big_amount: f32, model: q.String, amount: f32, weapon: f32, netname: q.String) void {
     const self = q.me();
-    if (q.deathmatch.get() == 4)
+    if (g.deathmatch.get() == 4)
         return;
 
     self.touch = q.func(ammo_touch);
@@ -728,11 +729,11 @@ fn ammoItem(big: bool, big_model: q.String, big_amount: f32, model: q.String, am
     if (big) {
         _ = q.precache_model(big_model);
         q.setmodel(self, big_model);
-        self.set(q.aflag, big_amount);
+        self.set(g.aflag, big_amount);
     } else {
         _ = q.precache_model(model);
         q.setmodel(self, model);
-        self.set(q.aflag, amount);
+        self.set(g.aflag, amount);
     }
     self.weapon = weapon;
     self.netname = netname;
@@ -776,11 +777,11 @@ pub export fn item_weapon() void {
         if (q.has(self.spawnflags, WEAPON_BIG)) {
             _ = q.precache_model(S("maps/b_shell1.bsp"));
             q.setmodel(self, S("maps/b_shell1.bsp"));
-            self.set(q.aflag, 40);
+            self.set(g.aflag, 40);
         } else {
             _ = q.precache_model(S("maps/b_shell0.bsp"));
             q.setmodel(self, S("maps/b_shell0.bsp"));
-            self.set(q.aflag, 20);
+            self.set(g.aflag, 20);
         }
         self.weapon = 1;
         self.netname = S("shells");
@@ -790,11 +791,11 @@ pub export fn item_weapon() void {
         if (q.has(self.spawnflags, WEAPON_BIG)) {
             _ = q.precache_model(S("maps/b_nail1.bsp"));
             q.setmodel(self, S("maps/b_nail1.bsp"));
-            self.set(q.aflag, 40);
+            self.set(g.aflag, 40);
         } else {
             _ = q.precache_model(S("maps/b_nail0.bsp"));
             q.setmodel(self, S("maps/b_nail0.bsp"));
-            self.set(q.aflag, 20);
+            self.set(g.aflag, 20);
         }
         self.weapon = 2;
         self.netname = S("spikes");
@@ -804,11 +805,11 @@ pub export fn item_weapon() void {
         if (q.has(self.spawnflags, WEAPON_BIG)) {
             _ = q.precache_model(S("maps/b_rock1.bsp"));
             q.setmodel(self, S("maps/b_rock1.bsp"));
-            self.set(q.aflag, 10);
+            self.set(g.aflag, 10);
         } else {
             _ = q.precache_model(S("maps/b_rock0.bsp"));
             q.setmodel(self, S("maps/b_rock0.bsp"));
-            self.set(q.aflag, 5);
+            self.set(g.aflag, 5);
         }
         self.weapon = 3;
         self.netname = S("rockets");
@@ -844,15 +845,15 @@ pub fn key_touch() callconv(.c) void {
     other.items = q.bor(other.items, self.items);
 
     self.solid = q.SOLID_NOT;
-    self.model = q.string_null.get();
+    self.model = g.string_null.get();
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
 pub fn key_setsounds() callconv(.c) void {
     const self = q.me();
-    const worldtype = q.world.get().get(q.worldtype);
+    const worldtype = q.world.get().get(g.worldtype);
     if (worldtype == 0) {
         _ = q.precache_sound(S("misc/medkey.wav"));
         self.noise = S("misc/medkey.wav");
@@ -878,7 +879,7 @@ pub fn key_setsounds() callconv(.c) void {
 /// 2: base
 pub export fn item_key1() void {
     const self = q.me();
-    const worldtype = q.world.get().get(q.worldtype);
+    const worldtype = q.world.get().get(g.worldtype);
     if (worldtype == 0) {
         _ = q.precache_model(S("progs/w_s_key.mdl"));
         q.setmodel(self, S("progs/w_s_key.mdl"));
@@ -910,7 +911,7 @@ pub export fn item_key1() void {
 /// 2: base
 pub export fn item_key2() void {
     const self = q.me();
-    const worldtype = q.world.get().get(q.worldtype);
+    const worldtype = q.world.get().get(g.worldtype);
     if (worldtype == 0) {
         _ = q.precache_model(S("progs/w_g_key.mdl"));
         q.setmodel(self, S("progs/w_g_key.mdl"));
@@ -953,11 +954,11 @@ pub fn sigil_touch() callconv(.c) void {
     q.sound(other, q.CHAN_ITEM, self.noise, 1, q.ATTN_NORM);
     q.stuffcmd(other, S("bf\n"));
     self.solid = q.SOLID_NOT;
-    self.model = q.string_null.get();
+    self.model = g.string_null.get();
     q.serverflags.set(q.bor(q.serverflags.get(), q.band(self.spawnflags, 15)));
     self.classname = S(""); // so rune doors won't find it
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -1012,7 +1013,7 @@ pub fn powerup_touch() callconv(.c) void {
     q.sprint(other, q.PRINT_LOW, self.netname);
     q.sprint(other, q.PRINT_LOW, S("\n"));
 
-    self.set(q.mdl, self.model);
+    self.set(g.mdl, self.model);
 
     if (self.classname.eql(S("item_artifact_invulnerability")) or
         self.classname.eql(S("item_artifact_invisibility")))
@@ -1028,35 +1029,35 @@ pub fn powerup_touch() callconv(.c) void {
     q.stuffcmd(other, S("bf\n"));
     self.solid = q.SOLID_NOT;
     other.items = q.bor(other.items, self.items);
-    self.model = q.string_null.get();
+    self.model = g.string_null.get();
 
     // do the apropriate action
     if (self.classname.eql(S("item_artifact_envirosuit"))) {
-        other.set(q.rad_time, 1);
-        other.set(q.radsuit_finished, q.time.get() + 30);
+        other.set(g.rad_time, 1);
+        other.set(g.radsuit_finished, q.time.get() + 30);
     }
 
     if (self.classname.eql(S("item_artifact_invulnerability"))) {
-        other.set(q.invincible_time, 1);
-        other.set(q.invincible_finished, q.time.get() + 30);
+        other.set(g.invincible_time, 1);
+        other.set(g.invincible_finished, q.time.get() + 30);
     }
 
     if (self.classname.eql(S("item_artifact_invisibility"))) {
-        other.set(q.invisible_time, 1);
-        other.set(q.invisible_finished, q.time.get() + 30);
+        other.set(g.invisible_time, 1);
+        other.set(g.invisible_finished, q.time.get() + 30);
     }
 
     if (self.classname.eql(S("item_artifact_super_damage"))) {
-        if (q.deathmatch.get() == 4) {
+        if (g.deathmatch.get() == 4) {
             other.armortype = 0;
             other.armorvalue = 0 * 0.01;
             other.ammo_cells = 0;
         }
-        other.set(q.super_time, 1);
-        other.set(q.super_damage_finished, q.time.get() + 30);
+        other.set(g.super_time, 1);
+        other.set(g.super_damage_finished, q.time.get() + 30);
     }
 
-    q.activator.set(other);
+    g.activator.set(other);
     subs.SUB_UseTargets(); // fire all targets / killtargets
 }
 
@@ -1126,7 +1127,7 @@ pub export fn item_artifact_super_damage() void {
     _ = q.precache_sound(S("items/damage3.wav"));
     self.noise = S("items/damage.wav");
     q.setmodel(self, S("progs/quaddama.mdl"));
-    if (q.deathmatch.get() == 4) {
+    if (g.deathmatch.get() == 4) {
         self.netname = S("OctaPower");
     } else {
         self.netname = S("Quad Damage");
@@ -1148,8 +1149,8 @@ pub fn BackpackTouch() callconv(.c) void {
     const other = q.other.get();
     var b_switch: f32 = 0;
 
-    if (q.deathmatch.get() == 4)
-        if (other.get(q.invincible_time) > 0)
+    if (g.deathmatch.get() == 4)
+        if (other.get(g.invincible_time) > 0)
             return;
 
     if (q.stof(q.infokey(other, S("b_switch"))) == 0) {
@@ -1167,7 +1168,7 @@ pub fn BackpackTouch() callconv(.c) void {
 
     q.sprint(other, q.PRINT_LOW, S("You get "));
 
-    if (q.deathmatch.get() == 4) {
+    if (g.deathmatch.get() == 4) {
         other.health = other.health + 10;
         q.sprint(other, q.PRINT_LOW, S("10 additional health\n"));
         if (other.health > 250 and other.health < 300) {
@@ -1179,13 +1180,13 @@ pub fn BackpackTouch() callconv(.c) void {
         q.remove(self);
 
         if (other.health > 299) {
-            if (other.get(q.invincible_time) != 1) {
-                other.set(q.invincible_time, 1);
-                other.set(q.invincible_finished, q.time.get() + 30);
+            if (other.get(g.invincible_time) != 1) {
+                other.set(g.invincible_time, 1);
+                other.set(g.invincible_finished, q.time.get() + 30);
                 other.items = q.bor(other.items, q.IT_INVULNERABILITY);
 
-                other.set(q.super_time, 1);
-                other.set(q.super_damage_finished, q.time.get() + 30);
+                other.set(g.super_time, 1);
+                other.set(g.super_damage_finished, q.time.get() + 30);
                 other.items = q.bor(other.items, q.IT_QUAD);
 
                 other.ammo_cells = 0;
@@ -1260,7 +1261,7 @@ pub fn BackpackTouch() callconv(.c) void {
         q.sprint(other, q.PRINT_LOW, S(" cells"));
     }
 
-    if ((q.deathmatch.get() == 3 or q.deathmatch.get() == 5) and (WeaponCode(new) == 6 or WeaponCode(new) == 7) and other.ammo_rockets < 5)
+    if ((g.deathmatch.get() == 3 or g.deathmatch.get() == 5) and (WeaponCode(new) == 6 or WeaponCode(new) == 7) and other.ammo_rockets < 5)
         other.ammo_rockets = 5;
 
     q.sprint(other, q.PRINT_LOW, S("\n"));

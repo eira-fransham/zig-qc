@@ -484,3 +484,34 @@ fn simd_lanes() {
     insta::assert_snapshot!(translate_wat("simd_lanes.wat"));
     check_compiles(&wat::parse_file(fixture("simd_lanes.wat")).unwrap(), "");
 }
+
+/// Exported `__quakec_field:<type>:<name>` and `__quakec_global:<type>:<name>`
+/// symbols declare user fields and globals that no code uses.
+#[test]
+fn declared_user_defs() {
+    let decls = r#"(global $m i32 (i32.const 0))
+        (export "__quakec_field:float:light_lev" (global $m))
+        (export "__quakec_field:function:th_die" (global $m))
+        (export "__quakec_global:entity:activator" (global $m))
+        (export "__quakec_global:vector:blood_org" (global $m))"#;
+    let src = translate_bytes(
+        &wat::parse_str(format!(r#"(module {decls} (func (export "f")))"#)).unwrap(),
+    );
+    for decl in [
+        ".float light_lev;",
+        ".void() th_die;",
+        "entity activator;",
+        "vector blood_org;",
+    ] {
+        assert!(src.contains(decl), "missing `{decl}` in:\n{src}");
+    }
+    let err = |export: &str| {
+        translate_err(&format!(
+            r#"(module (global $m i32 (i32.const 0)) (export "{export}" (global $m)))"#
+        ))
+    };
+    assert!(err("__quakec_field:int:x").contains("unknown type `int`"));
+    assert!(err("__quakec_field:float").contains("malformed declaration"));
+    assert!(err("__quakec_global:float:1x").contains("not a valid QuakeC identifier"));
+    assert!(err("__quakec_field:float:origin").contains("same name as a system"));
+}

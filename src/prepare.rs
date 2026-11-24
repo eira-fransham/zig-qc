@@ -634,8 +634,13 @@ pub fn remove_dead(body: &mut waffle::FunctionBody, pure: impl Fn(&waffle::Opera
 /// adjacent 4-byte copies or constant stores (e.g. of two entity fields)
 /// into one `i64` access, but QuakeC has no 64-bit values:
 /// - `i64.store(p, k)` of a constant becomes `i32.store`s of its halves;
-/// - an `i64.load` only used as the value of `i64.store`s becomes two
-///   `i32.load`s (in its place), and each store two `i32.store`s of them.
+/// - an `i64.load` only used as the value of `i64.store`s (or by
+///   `i64x2.splat`) becomes two `i32.load`s (in its place), and each store
+///   two `i32.store`s of them;
+/// - `i64x2.splat` of a split load (LLVM's way of putting a vector's first
+///   two components into a `v128`) becomes `f32x4.splat` of the low half,
+///   with the high half replacing lanes 1 and 3. Vector lanes are floats,
+///   so such a load's halves are `f32.load`s, and its stores `f32.store`s.
 ///
 /// Other `i64` values are left alone, and rejected later.
 pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
@@ -644,8 +649,10 @@ pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
         ValueDef::Operator(op, args, _) => Some((*op, body.arg_pool[*args].to_vec())),
         _ => None,
     };
-    // `i64.load`s whose every use is as a stored value.
+    // `i64.load`s whose every use is as a stored value (or splatted).
     let mut uses: std::collections::HashMap<Value, bool> = Default::default();
+    // Those that are splatted, so floats.
+    let mut splatted: std::collections::HashSet<Value> = Default::default();
     let mut used = |v: Value, as_value: bool| {
         let ok = uses.entry(body.resolve_alias(v)).or_insert(true);
         *ok &= as_value;
@@ -654,7 +661,15 @@ pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
         for &v in &def.insts {
             if let Some((op, args)) = op_of(body, v) {
                 for (i, &a) in args.iter().enumerate() {
-                    used(a, matches!(op, O::I64Store { .. }) && i == 1);
+                    if op == O::I64x2Splat {
+                        splatted.insert(body.resolve_alias(a));
+                    }
+                    let ok = match op {
+                        O::I64Store { .. } => i == 1,
+                        O::I64x2Splat => true,
+                        _ => false,
+                    };
+                    used(a, ok);
                 }
             }
         }
@@ -672,9 +687,11 @@ pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
         ]
     };
     let i32_ty = body.single_type_list(Type::I32);
+    let f32_ty = body.single_type_list(Type::F32);
+    let v128_ty = body.single_type_list(Type::V128);
     let blocks: Vec<_> = body.blocks.iter().collect();
-    // Each split load's halves.
-    let mut split: std::collections::HashMap<Value, [Value; 2]> = Default::default();
+    // Each split load's halves, and whether they're floats.
+    let mut split: std::collections::HashMap<Value, ([Value; 2], bool)> = Default::default();
     // The loads, then the stores (which may be in blocks before them).
     let phases = [false, true].into_iter();
     for (stores, b) in phases.flat_map(|s| blocks.iter().map(move |&b| (s, b))) {
@@ -687,21 +704,47 @@ pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
             };
             match op {
                 O::I64Load { memory } if !stores && uses.get(&v) == Some(&true) => {
+                    let float = splatted.contains(&v);
                     let pair = halves(memory).map(|memory| {
                         let a = body.arg_pool.from_iter([args[0]].into_iter());
-                        let l =
-                            body.add_value(ValueDef::Operator(O::I32Load { memory }, a, i32_ty));
+                        let (op, ty) = if float {
+                            (O::F32Load { memory }, f32_ty)
+                        } else {
+                            (O::I32Load { memory }, i32_ty)
+                        };
+                        let l = body.add_value(ValueDef::Operator(op, a, ty));
                         out.push(l);
                         l
                     });
-                    split.insert(v, pair);
+                    split.insert(v, (pair, float));
+                }
+                O::I64x2Splat if stores => {
+                    let Some(&([lo, hi], _)) = split.get(&body.resolve_alias(args[0])) else {
+                        out.push(v);
+                        continue;
+                    };
+                    let a = body.arg_pool.from_iter([lo].into_iter());
+                    let mut x = body.add_value(ValueDef::Operator(O::F32x4Splat, a, v128_ty));
+                    out.push(x);
+                    for lane in [1, 3] {
+                        let a = body.arg_pool.from_iter([x, hi].into_iter());
+                        let op = O::F32x4ReplaceLane { lane };
+                        x = if lane == 3 {
+                            // The last one takes the splat's place.
+                            body.values[v] = ValueDef::Operator(op, a, v128_ty);
+                            v
+                        } else {
+                            body.add_value(ValueDef::Operator(op, a, v128_ty))
+                        };
+                        out.push(x);
+                    }
                 }
                 O::I64Store { memory } if stores => {
                     let x = body.resolve_alias(args[1]);
-                    let values = if let Some(&pair) = split.get(&x) {
-                        pair
+                    let (values, float) = if let Some(&split) = split.get(&x) {
+                        split
                     } else if let Some((O::I64Const { value }, _)) = op_of(body, x) {
-                        [value as u32, (value >> 32) as u32].map(|value| {
+                        let k = [value as u32, (value >> 32) as u32].map(|value| {
                             let k = body.add_value(ValueDef::Operator(
                                 O::I32Const { value },
                                 Default::default(),
@@ -709,7 +752,8 @@ pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
                             ));
                             out.push(k);
                             k
-                        })
+                        });
+                        (k, false)
                     } else {
                         out.push(v);
                         continue;
@@ -719,11 +763,12 @@ pub fn split_i64_moves(body: &mut waffle::FunctionBody) {
                     };
                     for (memory, x) in halves(memory).into_iter().zip(values) {
                         let a = body.arg_pool.from_iter([args[0], x].into_iter());
-                        out.push(body.add_value(ValueDef::Operator(
-                            O::I32Store { memory },
-                            a,
-                            tys,
-                        )));
+                        let op = if float {
+                            O::F32Store { memory }
+                        } else {
+                            O::I32Store { memory }
+                        };
+                        out.push(body.add_value(ValueDef::Operator(op, a, tys)));
                     }
                 }
                 _ => out.push(v),
