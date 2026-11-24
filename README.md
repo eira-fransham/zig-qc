@@ -193,7 +193,7 @@ entity(entity v) identity_e =
 }
 ```
 
-Once compiled to WebAssembly, these will both be functions that simply take an `i32` and return it unmodified, which gets helpfully deduplicated into a single function. Even if we use our global type analysis to figure out the argument types of every function, we still might end up with functions which have multiple possible argument types. However, the type checker keeps all possible candidates in mind, and if a function has multiple potential types by the time we emit the QuakeC code, we just split it into one function per set of types[^fteqcc-variant].
+Once compiled to WebAssembly, these will both be functions that simply take an `i32` and return it unmodified, which get helpfully deduplicated into a single function. Even if we use our global type analysis to figure out the argument types of every function, we still might end up with functions which have multiple possible argument types. However, the type checker keeps all possible candidates in mind, and if a function has multiple potential types by the time we emit the QuakeC code, we just split it into one function per set of types[^fteqcc-variant].
 
 [^fteqcc-variant]: FTEQCC supports `__variant`, which can be any type. For our `identity` example, that would work just fine. Unfortunately, you can't actually do anything with a value of type `__variant` other than pass it around, so we'd still need to figure out a way to deduplicate functions that wouldn't support variant. I also try to generate relatvely nice-looking QuakeC code which is compatible with any compiler if I can, so I really didn't want to use `__variant` if I could avoid it.
 
