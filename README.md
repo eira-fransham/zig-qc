@@ -225,7 +225,7 @@ We also don't try to support FTEQCC's `int` type, although it would simplify som
 
 ## AI disclosure
 
-This README was written by hand, but the project was built with a lot of AI assistance. In particular, the Zig port of both QuakeWorld's and LibreQuake's QuakeC code were entirely handled by AI (albeit with a lot of human direction). The tests and implementation was written with AI assistance, and AI was used to debug issues..
+This README was written by hand, but the project was built with a lot of AI assistance. In particular, the Zig port of both QuakeWorld's and LibreQuake's QuakeC code were entirely handled by AI (albeit with a lot of human direction). The tests and implementation was written with AI assistance, and AI was used to debug issues.
 
 I haven't manually written any documentation yet other than this README, so please take into account that most of the code documentation and comments you see have been written by the AI. While I've looked over all the code now, and I've removed any obviously-wrong documentation/comments, I haven't written any of my own just yet. Take anything you read with a grain of salt.
 
