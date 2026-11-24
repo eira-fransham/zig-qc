@@ -5,8 +5,8 @@
 
 use std::fmt::Write;
 
-use crate::qc::QcType;
-use crate::sysdefs::{SYS_GLOBALS_START, SysDefs, SysTy};
+use wasm2qc::qc::QcType;
+use wasm2qc::sysdefs::{SYS_GLOBALS_START, SysDefs, SysTy};
 
 const TEMPLATE: &str = include_str!("zigdefs/defs.zig.in");
 

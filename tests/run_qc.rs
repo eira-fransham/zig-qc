@@ -35,7 +35,7 @@ fn fixture_progs(name: &str) -> Option<PathBuf> {
             .join(name),
     )
     .unwrap();
-    let qc = wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default())
+    let qc = wasm2qc::translate(&wasm, &wasm2qc::Options::default())
         .unwrap()
         .source;
     let dir = std::env::temp_dir().join(format!("run-qc-fixture-{}-{name}", std::process::id()));

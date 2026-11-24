@@ -1,14 +1,22 @@
 [package]
-name = "wasm-to-qc"
+name = "zig-qc"
 version = "0.1.0"
 edition = "2024"
-default-run = "wasm-to-qc"
+default-run = "zig-qc"
 
-[dependencies]
+[workspace]
+members = ["crates/wasm2qc"]
+
+[workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 waffle = "0.4"
 walrus = "0.26"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+wasm2qc = { path = "crates/wasm2qc" }
 
 [dev-dependencies]
 insta = "1"

@@ -36,7 +36,9 @@ fn defs_zig_tests() {
 /// Run with `UPDATE_ZIG_DEFS=1` to regenerate them.
 #[test]
 fn generated_defs_are_up_to_date() {
-    use wasm_to_qc::{sysdefs, zigdefs};
+    use wasm2qc::sysdefs;
+    use zig_qc::zigdefs;
+
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let files = [
         (&sysdefs::QUAKEWORLD, "zig-src/src/defs.zig"),

@@ -8,8 +8,8 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn translate_bytes(wasm: &[u8]) -> String {
-    let opts = wasm_to_qc::Options { prelude: false };
-    let out = wasm_to_qc::translate(wasm, &opts).expect("translation failed");
+    let opts = wasm2qc::Options { prelude: false };
+    let out = wasm2qc::translate(wasm, &opts).expect("translation failed");
     assert!(out.warnings.is_empty(), "warnings: {:?}", out.warnings);
     out.source
 }
@@ -29,7 +29,7 @@ fn check_compiles(wasm: &[u8], extra: &str) {
         eprintln!("skipping fteqcc check: {} not found", fteqcc.display());
         return;
     }
-    let src = wasm_to_qc::translate(wasm, &wasm_to_qc::Options::default())
+    let src = wasm2qc::translate(wasm, &wasm2qc::Options::default())
         .unwrap()
         .source;
     let dir = std::env::temp_dir().join(format!(
@@ -198,7 +198,7 @@ fn static_data_errors() {
 
 fn translate_err(wat: &str) -> String {
     let wasm = wat::parse_str(wat).unwrap();
-    match wasm_to_qc::translate(&wasm, &wasm_to_qc::Options::default()) {
+    match wasm2qc::translate(&wasm, &wasm2qc::Options::default()) {
         Ok(_) => panic!("expected translation to fail"),
         Err(e) => format!("{e:#}"),
     }

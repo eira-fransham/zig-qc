@@ -557,16 +557,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-to-qc"
+name = "wasm2qc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "insta",
- "serde_json",
  "waffle",
  "walrus",
- "wat",
 ]
 
 [[package]]
@@ -638,6 +635,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "zig-qc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "insta",
+ "serde_json",
+ "wasm2qc",
+ "wat",
 ]
 
 [[package]]
