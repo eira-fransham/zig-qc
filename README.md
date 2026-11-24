@@ -140,7 +140,7 @@ fn set_sound(
         // the block, since `self.sounds` isn't a
         // compile-time constant.
         //
-        // Usually we could write `if (self.sound) continue`
+        // Usually we could write this as a guard expression
         // but `continue` doesn't work inside `inline for`
         // in the current version of Zig.
         if (self.sounds == i) {
